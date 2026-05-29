@@ -487,7 +487,36 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
       }
       setStreamingProgress("");
     } catch (err: any) {
-      console.warn("PII Sanitization placeholder applied", err);
+      const placeholders = Array.from(
+        new Set(
+          (text.match(/\[([A-Z0-9_ ]{3,})\]/g) || [])
+            .map((token) => token.replace(/[\[\]]/g, "").trim())
+            .filter(Boolean)
+        )
+      ).slice(0, 8);
+
+      const fallbackFields = placeholders.length > 0
+        ? placeholders.map((label, index) => {
+            const id = label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || `field_${index + 1}`;
+            return {
+              id,
+              name: label.replace(/_/g, " "),
+              defaultValue: advancedFieldValues[id] || "",
+              description: "Locally extracted template placeholder",
+            };
+          })
+        : advancedFields;
+
+      const fallbackValues = fallbackFields.reduce((acc, field) => {
+        acc[field.id] = advancedFieldValues[field.id] ?? field.defaultValue ?? "";
+        return acc;
+      }, {} as Record<string, string>);
+
+      setAdvancedFields(fallbackFields);
+      setAdvancedFieldValues(fallbackValues);
+      setUploadText(text);
+      setStreamingProgress("Template service unavailable. Applied local placeholder extraction.");
+      console.warn("PII sanitization service unavailable. Local placeholder extraction applied.", err);
     } finally {
       setIsParsingTemplate(false);
       setStreamingProgress("");

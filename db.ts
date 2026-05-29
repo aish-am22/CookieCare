@@ -19,7 +19,7 @@ if (connectionString) {
     console.warn("Unable to log sanitized DB URL safely:", rawErr);
   }
 } else {
-  console.error("CRITICAL ALERTER: DATABASE_URL is completely empty in process.env!");
+  console.warn("DATABASE_URL is not set. Postgres features will use local JSON fallback paths.");
 }
 
 export const pool = new Pool({
@@ -538,4 +538,3 @@ export async function authenticateToken(req: any, res: any, next: any) {
     return res.status(401).json({ error: "Access denied. Invalid token sessions." });
   }
 }
-

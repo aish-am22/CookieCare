@@ -44,7 +44,14 @@ const ai = new GoogleGenAI({
 
 const app = express();
 const httpServer = http.createServer(app);
-const DEFAULT_PORT = Number(process.env.PORT) || 3000;
+const parsedRequestedPort = Number(process.env.SERVER_PORT ?? process.env.PORT ?? 3000);
+const DEFAULT_PORT = Number.isFinite(parsedRequestedPort) && parsedRequestedPort > 0
+  ? parsedRequestedPort
+  : 3000;
+const SESSION_COOKIE_NAME = "cookiecare_session";
+const SESSION_TTL_SECONDS = Number(process.env.SESSION_TTL_SECONDS ?? 60 * 60 * 24 * 7);
+
+app.set("trust proxy", 1);
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -67,6 +74,105 @@ async function findAvailablePort(startPort: number): Promise<number> {
 
   throw new Error(`Unable to find an available port starting at ${startPort}`);
 }
+
+function parseCookies(cookieHeader?: string | string[]) {
+  const raw = Array.isArray(cookieHeader) ? cookieHeader.join(";") : cookieHeader ?? "";
+  if (!raw) return {} as Record<string, string>;
+
+  return raw.split(";").reduce((acc, pair) => {
+    const [name, ...valueParts] = pair.trim().split("=");
+    if (!name || valueParts.length === 0) return acc;
+    acc[name] = decodeURIComponent(valueParts.join("="));
+    return acc;
+  }, {} as Record<string, string>);
+}
+
+function getAuthToken(req: any): string {
+  const authHeader = req.headers["authorization"];
+  if (typeof authHeader === "string" && authHeader.trim()) {
+    const [scheme, token] = authHeader.split(" ");
+    if (/^Bearer$/i.test(scheme) && token) {
+      return token.trim();
+    }
+  }
+
+  const cookies = parseCookies(req.headers.cookie);
+  if (cookies[SESSION_COOKIE_NAME]) {
+    return cookies[SESSION_COOKIE_NAME];
+  }
+
+  if (typeof req.query?.token === "string") {
+    return req.query.token.trim();
+  }
+
+  return "";
+}
+
+function shouldSetSecureCookie(req: any): boolean {
+  const forwardedProto = req.headers["x-forwarded-proto"];
+  const proto = Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto;
+  return req.secure || proto === "https" || process.env.CODESPACES === "true";
+}
+
+function setSessionCookie(req: any, res: any, token: string) {
+  const isSecure = shouldSetSecureCookie(req);
+  const sameSite = isSecure ? "None" : "Lax";
+  const domain = process.env.SESSION_COOKIE_DOMAIN?.trim();
+
+  const parts = [
+    `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}`,
+    `Max-Age=${SESSION_TTL_SECONDS}`,
+    "HttpOnly",
+    "Path=/",
+    `SameSite=${sameSite}`,
+  ];
+
+  if (isSecure) {
+    parts.push("Secure");
+  }
+  if (domain) {
+    parts.push(`Domain=${domain}`);
+  }
+
+  res.setHeader("Set-Cookie", parts.join("; "));
+}
+
+const configuredOrigins = (process.env.CORS_ORIGIN || "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+const codespaceName = process.env.CODESPACE_NAME;
+const forwardingDomain = process.env.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN;
+const codespacesOrigin = codespaceName && forwardingDomain
+  ? `https://${codespaceName}-*.${forwardingDomain}`
+  : null;
+
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+
+  if (origin) {
+    const allowByConfig = configuredOrigins.includes(origin);
+    const allowByLocalhost = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+    const allowByCodespaces = Boolean(
+      codespacesOrigin &&
+      new RegExp(`^https://${codespaceName}-\\d+\\.${forwardingDomain?.replace(".", "\\.")}$`).test(origin)
+    );
+
+    if (allowByConfig || allowByLocalhost || allowByCodespaces) {
+      res.header("Access-Control-Allow-Origin", origin);
+      res.header("Vary", "Origin");
+      res.header("Access-Control-Allow-Credentials", "true");
+      res.header("Access-Control-Allow-Headers", "Authorization, Content-Type");
+      res.header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
+    }
+  }
+
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(204);
+  }
+
+  next();
+});
 
 // Configure in-memory multer file upload parser
 const upload = multer({
@@ -429,14 +535,9 @@ function decryptData(text: string): string {
 
 // Authentication Token Verification Middleware
 const authenticateToken = async (req: any, res: any, next: any) => {
-  const authHeader = req.headers["authorization"];
-  if (!authHeader) {
-    return res.status(401).json({ error: "Access denied. Token missing." });
-  }
-
-  const token = authHeader.split(" ")[1];
+  const token = getAuthToken(req);
   if (!token) {
-    return res.status(401).json({ error: "Access denied. Token invalid." });
+    return res.status(401).json({ error: "Access denied. Token missing." });
   }
 
   let user: any = null;
@@ -497,6 +598,7 @@ app.post("/api/auth/register", async (req, res) => {
       console.warn("Folder sync warning:", fsErr);
     }
 
+    setSessionCookie(req, res, newUserId);
     return res.json({ token: newUserId, user: { id: newUserId, email: email.toLowerCase(), name } });
   } catch (err: any) {
     console.error("Postgres registration error:", err);
@@ -518,6 +620,7 @@ app.post("/api/auth/login", async (req, res) => {
 
     if (rows.length > 0) {
       const user = rows[0];
+      setSessionCookie(req, res, user.id);
       return res.json({ token: user.id, user: { id: user.id, email: user.email, name: user.name } });
     }
   } catch (err) {
@@ -534,7 +637,25 @@ app.post("/api/auth/login", async (req, res) => {
     return res.status(401).json({ error: "Invalid email or password." });
   }
 
+  setSessionCookie(req, res, user.id);
   res.json({ token: user.id, user: { id: user.id, email: user.email, name: user.name } });
+});
+
+app.post("/api/auth/logout", (req, res) => {
+  const isSecure = shouldSetSecureCookie(req);
+  const sameSite = isSecure ? "None" : "Lax";
+  const domain = process.env.SESSION_COOKIE_DOMAIN?.trim();
+  const cookieBits = [
+    `${SESSION_COOKIE_NAME}=`,
+    "Max-Age=0",
+    "HttpOnly",
+    "Path=/",
+    `SameSite=${sameSite}`,
+  ];
+  if (isSecure) cookieBits.push("Secure");
+  if (domain) cookieBits.push(`Domain=${domain}`);
+  res.setHeader("Set-Cookie", cookieBits.join("; "));
+  res.json({ success: true });
 });
 
 
@@ -559,10 +680,7 @@ app.get("/api/jobs/:id", authenticateToken, (req: any, res) => {
 });
 
 app.get("/api/jobs/stream", (req: any, res) => {
-  let token = (req.query.token as string) || "";
-  if (!token && req.headers["authorization"]) {
-    token = req.headers["authorization"].split(" ")[1];
-  }
+  const token = getAuthToken(req);
 
   if (!token) {
     return res.status(401).json({ error: "Access denied. Credentials token required." });
@@ -1607,12 +1725,27 @@ Do not output markdown backticks wrapping the whole document. Respond with beaut
 loadDatabase();
 
 async function startServer() {
-  // Initialize Neon Postgres database schema and HNSW pgvector indices
-  try {
-    await dbInit();
-    console.log("Postgres & pgvector system successfully connected.");
-  } catch (err) {
-    console.error("Warning: Could not connect to Neon Postgres, cascading to local schema backup engine:", err);
+  const hasDatabaseUrl = Boolean(process.env.DATABASE_URL?.trim());
+  if (hasDatabaseUrl) {
+    const maxRetries = Math.max(1, Number(process.env.DB_INIT_RETRIES ?? 3));
+    const retryDelayMs = Math.max(250, Number(process.env.DB_INIT_RETRY_DELAY_MS ?? 1500));
+
+    for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
+      try {
+        await dbInit();
+        console.log("Postgres & pgvector system successfully connected.");
+        break;
+      } catch (err) {
+        if (attempt >= maxRetries) {
+          console.error("Warning: Could not connect to Neon Postgres, cascading to local schema backup engine:", err);
+        } else {
+          console.warn(`Postgres init failed on attempt ${attempt}/${maxRetries}. Retrying in ${retryDelayMs}ms...`);
+          await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+        }
+      }
+    }
+  } else {
+    console.warn("DATABASE_URL not set; using local JSON database fallback mode.");
   }
 
   const port = await findAvailablePort(DEFAULT_PORT);
