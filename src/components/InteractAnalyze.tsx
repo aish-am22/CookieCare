@@ -72,7 +72,7 @@ export default function InteractAnalyze({
 
   // --- SCREEN A: FORM SELECTION STATE ---
   const [folders, setFolders] = useState<CustomFolder[]>([
-    { id: "f1", name: "Lexlegis Sample Files", filesCount: 3, selected: false },
+    { id: "f1", name: "CookieCare Sample Files", filesCount: 3, selected: false },
     { id: "f2", name: "Ask - Folder Test", filesCount: 7, selected: false },
     { id: "f3", name: "CD PR Agreement", filesCount: 2, selected: false },
     { id: "f4", name: "Chirag Doshi DA", filesCount: 3, selected: false },
@@ -178,9 +178,9 @@ export default function InteractAnalyze({
   // The interactive Traffic Light contract clauses displayed on the main report canvas
   const [reportClauses, setReportClauses] = useState([
     {
-      id: "clause-1",
-      title: "1. RECITALS & ACTIVE PURPOSE",
-      clauseText: "This Bilateral Security Assessment and Integration Services Agreement (the 'Agreement') is entered into on this 10th day of April, 2026, by and between Mantralay Services ('Disclosing Party') and LexLegis Corp ('Receiving Party') regarding shared security parameters.",
+    id: "clause-1",
+    title: "1. RECITALS & ACTIVE PURPOSE",
+    clauseText: "This Bilateral Security Assessment and Integration Services Agreement (the 'Agreement') is entered into on this 10th day of April, 2026, by and between Mantralay Services ('Disclosing Party') and CookieCare Corp ('Receiving Party') regarding shared security parameters.",
       severity: "compliant" as const,
       reason: "Standard corporate recitals defining company entities, purpose, mutual scope of data security, and standard privacy objectives.",
       remediation: null,

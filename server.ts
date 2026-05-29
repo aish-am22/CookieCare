@@ -1,6 +1,8 @@
 import express from "express";
+import http from "http";
 import path from "path";
 import fs from "fs";
+import net from "net";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
@@ -41,7 +43,30 @@ const ai = new GoogleGenAI({
 (global as any).ai = ai;
 
 const app = express();
-const PORT = 3000;
+const httpServer = http.createServer(app);
+const DEFAULT_PORT = Number(process.env.PORT) || 3000;
+
+function isPortAvailable(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+
+    server.unref();
+    server.on("error", () => resolve(false));
+    server.listen({ port, host: "0.0.0.0" }, () => {
+      server.close(() => resolve(true));
+    });
+  });
+}
+
+async function findAvailablePort(startPort: number): Promise<number> {
+  for (let port = startPort; port < startPort + 50; port += 1) {
+    if (await isPortAvailable(port)) {
+      return port;
+    }
+  }
+
+  throw new Error(`Unable to find an available port starting at ${startPort}`);
+}
 
 // Configure in-memory multer file upload parser
 const upload = multer({
@@ -142,7 +167,7 @@ interface Database {
 
 const DEFAULT_NDA_CONTENT = `MUTUAL NON-DISCLOSURE AGREEMENT
 
-This Mutual Non-Disclosure Agreement (this "Agreement") is entered into as of May 28, 2026, by and between LexLegis Corp, and the receiving business partner.
+This Mutual Non-Disclosure Agreement (this "Agreement") is entered into as of May 28, 2026, by and between CookieCare Corp, and the receiving business partner.
 
 1. PURPOSE
 The parties wish to explore a business opportunity of mutual interest and in connection therewith, may disclose to each other certain confidential technical and business information.
@@ -166,7 +191,7 @@ In the event of a breach, Disclosing Party is entitled to immediate injunctive r
 
 IN WITNESS WHEREOF, the parties have executed this Agreement.
 
-LexLegis Corporation:
+CookieCare Corporation:
 Signer name: ___________________
 Signature: ______________________
 
@@ -176,7 +201,7 @@ Signature: ______________________`;
 
 const DEFAULT_DPA_CONTENT = `DATA PROCESSING AGREEMENT (DPA)
 
-This Data Processing Agreement ("DPA") governs the processing of personal data in connection with the Master Services Agreement between LexLegis Corp and customer.
+This Data Processing Agreement ("DPA") governs the processing of personal data in connection with the Master Services Agreement between CookieCare Corp and customer.
 
 1. DEFINITIONS
 "GDPR" means the General Data Protection Regulation (Regulation (EU) 2016/679).
@@ -211,7 +236,7 @@ function loadDatabase(): Database {
       documents: [
         {
           id: "doc_nda_sample",
-          title: "LexLegis Mutual NDA (Standard)",
+          title: "CookieCare Mutual NDA (Standard)",
           type: "NDA",
           creatorId: "krish_jain_id",
           creatorEmail: "swarnaaishwarya17@gmail.com",
@@ -298,7 +323,7 @@ function loadDatabase(): Database {
         },
         {
           id: "doc_dpa_sample",
-          title: "LexLegis GDPR DPA (Partner)",
+          title: "CookieCare GDPR DPA (Partner)",
           type: "DPA",
           creatorId: "krish_jain_id",
           creatorEmail: "swarnaaishwarya17@gmail.com",
@@ -403,7 +428,7 @@ function decryptData(text: string): string {
 (global as any).decryptData = decryptData;
 
 // Authentication Token Verification Middleware
-const authenticateToken = (req: any, res: any, next: any) => {
+const authenticateToken = async (req: any, res: any, next: any) => {
   const authHeader = req.headers["authorization"];
   if (!authHeader) {
     return res.status(401).json({ error: "Access denied. Token missing." });
@@ -414,9 +439,26 @@ const authenticateToken = (req: any, res: any, next: any) => {
     return res.status(401).json({ error: "Access denied. Token invalid." });
   }
 
-  const db = loadDatabase();
-  // We use user_id directly as token for smooth iframe performance bypass
-  const user = db.users.find((u) => u.id === token || u.email === token);
+  let user: any = null;
+
+  try {
+    const { rows } = await pool.query(
+      "SELECT id, email, name FROM users WHERE id = $1 OR email = $2",
+      [token, token]
+    );
+    if (rows.length > 0) {
+      user = rows[0];
+    }
+  } catch (err) {
+    console.warn("Postgres auth lookup failed, falling back to local session store:", err);
+  }
+
+  if (!user) {
+    const db = loadDatabase();
+    // We use user_id directly as token for smooth iframe performance bypass
+    user = db.users.find((u) => u.id === token || u.email === token);
+  }
+
   if (!user) {
     return res.status(403).json({ error: "Unauthorized or invalid user session." });
   }
@@ -723,7 +765,7 @@ app.post("/api/documents/export", (req: any, res) => {
     const risks = payload?.risks || [];
     bodyHtml = `
       <div style="font-family: Arial, sans-serif;">
-        <h1 style="color: #1a365d; border-bottom: 2px solid #1a365d; padding-bottom: 8px;">LexLegis Enterprise Legal Risk Report</h1>
+        <h1 style="color: #1a365d; border-bottom: 2px solid #1a365d; padding-bottom: 8px;">CookieCare Enterprise Legal Risk Report</h1>
         <div style="margin: 20px 0; padding: 15px; background: #f7fafc; border-left: 4px solid #3182ce;">
           <p style="margin: 2px 0;">Document Scope: <strong>${title}</strong></p>
           <p style="margin: 2px 0;">Overall Compliance Score: <span style="background: #e2e8f0; padding: 4px 8px; border-radius: 4px; color: #2d3748; font-weight: bold;">${payload?.overallScore || "Evaluated"}</span></p>
@@ -897,7 +939,7 @@ app.post("/api/documents/export", (req: any, res) => {
       </head>
       <body>
         <div class="control-header no-print">
-          <span style="font-weight: bold; font-family: sans-serif;">LexLegis Automated Dispatch - PDF Preview</span>
+          <span style="font-weight: bold; font-family: sans-serif;">CookieCare Automated Dispatch - PDF Preview</span>
           <button onclick="window.print()" class="btn-print">Print / Save as PDF</button>
         </div>
         <div class="container">
@@ -1431,7 +1473,7 @@ Do not use markdown backticks. Return raw parsed JSON.`,
       const mockResult = {
         redactedText: simulatedRedacted + "\n\n[AUDITED WORKSPACE DATA BLUEPRINT ENFORCED]",
         fields: [
-          { id: "party_a", name: "Disclosing Entity Name", defaultValue: "LexLegis Corp", description: "The full legal designation of the disclosing business partner." },
+          { id: "party_a", name: "Disclosing Entity Name", defaultValue: "CookieCare Corp", description: "The full legal designation of the disclosing business partner." },
           { id: "party_b", name: "Receiving Entity Name", defaultValue: "TechPartner LLC", description: "The receiving business partner entity name." },
           { id: "effective_date", name: "Agreement Effective Date", defaultValue: new Date().toLocaleDateString(), description: "Effective activation timestamp." },
           { id: "governing_law", name: "Jurisdictional Law", defaultValue: "State of Delaware", description: "Choosing the governing court law." },
@@ -1541,7 +1583,7 @@ Do not output markdown backticks wrapping the whole document. Respond with beaut
           templateId || "NDA",
           formFields?.governing_law || "State of Delaware",
           formFields?.governing_law || "Delaware",
-          formFields?.party_a || "LexLegis Corporate Group",
+          formFields?.party_a || "CookieCare Corporate Group",
           formFields?.party_b || "Specified Infrastructure Partner",
           formFields?.liability_cap || "twelve rolling months spend",
           instructions,
@@ -1573,10 +1615,19 @@ async function startServer() {
     console.error("Warning: Could not connect to Neon Postgres, cascading to local schema backup engine:", err);
   }
 
+  const port = await findAvailablePort(DEFAULT_PORT);
+
   // Vite setup for developer sandbox hot compiles
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: {
+          server: httpServer,
+          host: "0.0.0.0",
+          clientPort: port,
+        },
+      },
       appType: "spa",
     });
     app.use(vite.middlewares);
@@ -1589,8 +1640,8 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`LexLegis AI Server running on http://localhost:${PORT}`);
+  httpServer.listen(port, "0.0.0.0", () => {
+    console.log(`CookieCare AI Server running on http://localhost:${port}`);
   });
 }
 

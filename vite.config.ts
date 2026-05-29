@@ -4,6 +4,8 @@ import path from 'path';
 import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
+  const disableHmr = process.env.DISABLE_HMR === 'true' || process.env.CODESPACES === 'true';
+
   return {
     plugins: [react(), tailwindcss()],
     resolve: {
@@ -12,11 +14,11 @@ export default defineConfig(() => {
       },
     },
     server: {
-      // HMR is disabled in AI Studio via DISABLE_HMR env var.
+      // HMR is disabled in AI Studio and Codespaces via env flags.
       // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
-      hmr: process.env.DISABLE_HMR !== 'true',
+      hmr: disableHmr ? false : undefined,
       // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
-      watch: process.env.DISABLE_HMR === 'true' ? null : {},
+      watch: disableHmr ? null : {},
     },
   };
 });

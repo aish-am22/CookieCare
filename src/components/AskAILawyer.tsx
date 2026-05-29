@@ -98,7 +98,7 @@ export default function AskAILawyer({ authToken, documents = [] }: AskAILawyerPr
       name: "Delaware Corporate Bylaws",
       isSelected: true,
       files: [
-        { name: "lexlegis_delaware_bylaws_revised.docx", type: "DOCX", size: "8.5 MB", content: "Board of director authorization limits and stockholder notice parameters." }
+        { name: "cookiecare_delaware_bylaws_revised.docx", type: "DOCX", size: "8.5 MB", content: "Board of director authorization limits and stockholder notice parameters." }
       ]
     }
   ]);
@@ -313,11 +313,11 @@ export default function AskAILawyer({ authToken, documents = [] }: AskAILawyerPr
     setTimeout(() => setExportMessage(""), 3000);
 
     if (format === "Word") {
-      const header = `LexLegis AI Advisory - Legal Research Dossier\nExported: ${new Date().toLocaleString()}\nFormat Style: ${selectedFormat}\nJurisdictions: ${selectedJurisdictions.join(", ")}\n\n===========================================\n\n`;
+      const header = `CookieCare AI Advisory - Legal Research Dossier\nExported: ${new Date().toLocaleString()}\nFormat Style: ${selectedFormat}\nJurisdictions: ${selectedJurisdictions.join(", ")}\n\n===========================================\n\n`;
       const blob = new Blob([header + streamedResult], { type: "application/msword" });
       const link = document.createElement("a");
       link.href = URL.createObjectURL(blob);
-      link.download = `lexlegis_ai_lawyer_advisory_${Date.now()}.doc`;
+      link.download = `cookiecare_ai_lawyer_advisory_${Date.now()}.doc`;
       link.click();
     } else {
       // PDF trigger via Print friendly format in a new frame or simple download format
@@ -326,7 +326,7 @@ export default function AskAILawyer({ authToken, documents = [] }: AskAILawyerPr
         printWindow.document.write(`
           <html>
             <head>
-              <title>LexLegis AI Lawyer - Research Dossier</title>
+              <title>CookieCare AI Lawyer - Research Dossier</title>
               <style>
                 body { font-family: -apple-system, sans-serif; padding: 40px; color: #111; line-height: 1.6; }
                 h1 { border-bottom: 2px solid #000; padding-bottom: 10px; font-size: 24px; text-transform: uppercase; }
@@ -336,13 +336,13 @@ export default function AskAILawyer({ authToken, documents = [] }: AskAILawyerPr
               </style>
             </head>
             <body>
-              <h1>LexLegis AI Legal Advisory Docket</h1>
+              <h1>CookieCare AI Legal Advisory Docket</h1>
               <p><strong>System Date:</strong> ${new Date().toLocaleString()}</p>
               <p><strong>Format Framework:</strong> ${selectedFormat}</p>
               <p><strong>Target Jurisdictions:</strong> ${selectedJurisdictions.join(", ")}</p>
               <hr />
               <div>${streamedResult.replace(/\n/g, "<br>")}</div>
-              <footer>*Protected by FIPS-compliance standards. Created on LexLegis Security Sandbox.</footer>
+              <footer>*Protected by FIPS-compliance standards. Created on CookieCare Security Sandbox.</footer>
             </body>
           </html>
         `);
@@ -432,7 +432,7 @@ export default function AskAILawyer({ authToken, documents = [] }: AskAILawyerPr
                 Consult AI Lawyer
               </h1>
               <span className="bg-black text-white px-2 py-0.5 text-[9px] font-mono tracking-wider uppercase">
-                LEXLEGIS ASK v1.2
+                COOKIECARE ASK v1.2
               </span>
             </div>
             <p className="text-[10px] font-mono text-gray-400 mt-0.5">
@@ -915,7 +915,7 @@ export default function AskAILawyer({ authToken, documents = [] }: AskAILawyerPr
               )}
 
               <div className="mt-auto pt-6 border-t border-gray-200 text-[10px] font-mono text-gray-400 leading-normal select-none">
-                *Verified materials are indexed straight from official gazettes and LexLegis deep RAG nodes.
+                *Verified materials are indexed straight from official gazettes and CookieCare deep RAG nodes.
               </div>
             </div>
 
@@ -978,7 +978,7 @@ export default function AskAILawyer({ authToken, documents = [] }: AskAILawyerPr
                   {activeCitationModal.officialCopy}
                 </div>
                 <div className="text-[10px] text-gray-400 italic font-mono select-none">
-                  --- End of official docket record transcript. Indexed under LexLegis FIPS security channel.
+                  --- End of official docket record transcript. Indexed under CookieCare FIPS security channel.
                 </div>
               </div>
 

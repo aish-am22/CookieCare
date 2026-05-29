@@ -549,7 +549,7 @@ Do not output markdown backticks wrapping the whole document. Respond with beaut
           templateId || "NDA",
           formFields?.governing_law || "State of Delaware",
           formFields?.governing_law || "Delaware",
-          formFields?.party_a || "LexLegis Corporate Group",
+          formFields?.party_a || "CookieCare Corporate Group",
           formFields?.party_b || "Specified Infrastructure Partner",
           formFields?.liability_cap || "twelve rolling months spend",
           instructions,
@@ -557,8 +557,8 @@ Do not output markdown backticks wrapping the whole document. Respond with beaut
         );
         finalDraft = draftResult.agreementText;
       } else {
-        finalDraft = `LEXLEGIS BACKUP COMPLIANCE AGREEMENT
-Processed for Party A: ${formFields?.party_a || "LexLegis Corp"} and Party B: ${formFields?.party_b || "Counterparty LTD"}.
+        finalDraft = `COOKIECARE BACKUP COMPLIANCE AGREEMENT
+Processed for Party A: ${formFields?.party_a || "CookieCare Corp"} and Party B: ${formFields?.party_b || "Counterparty LTD"}.
 Governing Jurisdiction: ${formFields?.governing_law || "State of Delaware"}.
 
 1. GENERAL RESPONSIBILITIES

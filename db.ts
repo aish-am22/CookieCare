@@ -154,27 +154,29 @@ export async function dbInit() {
     console.log("Postgres database schemas initialized successfully.");
 
     // 7. Seed initial master user and standard documents if empty
+    const defaultUser = {
+      id: "krish_jain_id",
+      email: "swarnaaishwarya17@gmail.com",
+      name: "Krish Jain",
+      passwordHash: "password123",
+    };
+
+    await client.query(`
+      INSERT INTO users (id, email, name, password_hash)
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (email) DO UPDATE SET
+        name = EXCLUDED.name,
+        password_hash = EXCLUDED.password_hash;
+    `, [defaultUser.id, defaultUser.email, defaultUser.name, defaultUser.passwordHash]);
+
     const { rows } = await client.query("SELECT COUNT(*) FROM users;");
     if (parseInt(rows[0].count) === 0) {
       console.log("Seeding Postgres database with default user and agreements...");
-      
-      const defaultUser = {
-        id: "krish_jain_id",
-        email: "swarnaaishwarya17@gmail.com",
-        name: "Krish Jain",
-        passwordHash: "password123",
-      };
-
-      await client.query(`
-        INSERT INTO users (id, email, name, password_hash)
-        VALUES ($1, $2, $3, $4)
-        ON CONFLICT (id) DO NOTHING;
-      `, [defaultUser.id, defaultUser.email, defaultUser.name, defaultUser.passwordHash]);
 
       // Seed documents
       const ndaContent = `MUTUAL NON-DISCLOSURE AGREEMENT
 
-This Mutual Non-Disclosure Agreement (this "Agreement") is entered into as of May 28, 2026, by and between LexLegis Corp, and the receiving business partner.
+    This Mutual Non-Disclosure Agreement (this "Agreement") is entered into as of May 28, 2026, by and between CookieCare Corp, and the receiving business partner.
 
 1. PURPOSE
 The parties wish to explore a business opportunity of mutual interest and in connection therewith, may disclose to each other certain confidential technical and business information.
@@ -198,7 +200,7 @@ In the event of a breach, Disclosing Party is entitled to immediate injunctive r
 
 IN WITNESS WHEREOF, the parties have executed this Agreement.
 
-LexLegis Corporation:
+CookieCare Corporation:
 Signer name: ___________________
 Signature: ______________________
 
@@ -212,7 +214,7 @@ Signature: ______________________`;
         ON CONFLICT (id) DO NOTHING;
       `, [
         "doc_nda_sample",
-        "LexLegis Mutual NDA (Standard)",
+          "CookieCare Mutual NDA (Standard)",
         "NDA",
         ndaContent,
         defaultUser.id,

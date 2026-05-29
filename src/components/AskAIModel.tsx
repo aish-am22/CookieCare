@@ -110,7 +110,7 @@ export default function AskAIModel({ documents, activeDocument, authToken }: Ask
       foldersSelected: [],
       understanding: {
         issue: "Discretion of Assessing Officer under Section 220(6) to grant stay on undisputed tax demands in cases of severe financial stringency.",
-        sourcing: "LexLegis central direct taxation archives, CIT guidelines, Indian High Court rosters, and ITAT revenue judgments.",
+        sourcing: "CookieCare central direct taxation archives, CIT guidelines, Indian High Court rosters, and ITAT revenue judgments.",
         laws: ["Section 220(6) of the Income Tax Act, 1961", "Article 226 of the Constitution of India"],
         provisions: ["OM F.No. 404/72/93-ITCC relating to 20% deposit rules", "Inherent stay powers of High Court / ITAT Tribunal guidelines"],
         precedents: [
@@ -540,7 +540,7 @@ We conclude that establishing a dual-tier liability structure (a general cap pai
       const blob = new Blob([detailedAnswerText], { type: "text/plain" });
       const link = document.createElement("a");
       link.href = URL.createObjectURL(blob);
-      link.download = `lexlegis_ai_dossier_${Date.now()}.${format === "Word" ? "doc" : "pdf"}`;
+      link.download = `cookiecare_ai_dossier_${Date.now()}.${format === "Word" ? "doc" : "pdf"}`;
       link.click();
     }, 1500);
   };
@@ -619,7 +619,7 @@ We conclude that establishing a dual-tier liability structure (a general cap pai
                     id="legal-primary-textarea"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search across the LexLegis database, your own files or URLs with explainable, source-backed responses."
+                    placeholder="Search across the CookieCare database, your own files or URLs with explainable, source-backed responses."
                     className="w-full h-32 pr-24 text-sm resize-none focus:outline-none placeholder:text-gray-400 font-sans leading-relaxed text-gray-800"
                   />
                   
@@ -917,7 +917,7 @@ We conclude that establishing a dual-tier liability structure (a general cap pai
               {/* Status information and Exit action */}
               <div className="pt-4 border-t border-gray-100 flex items-center justify-between">
                 <span className="text-[10px] font-mono text-gray-400 uppercase">
-                  Processing via LexLegis database...
+                  Processing via CookieCare database...
                 </span>
                 <button
                   id="terminate-generation-btn"
@@ -1135,7 +1135,7 @@ We conclude that establishing a dual-tier liability structure (a general cap pai
 
               {/* Desk notes footer */}
               <div className="p-4 border-t border-gray-200 bg-white text-[10px] font-mono text-gray-400 leading-relaxed">
-                *LexLegis verified court copies of judgments and original regulation copies indexed straight from official dockets.
+                *CookieCare verified court copies of judgments and original regulation copies indexed straight from official dockets.
               </div>
 
             </aside>
@@ -1156,7 +1156,7 @@ We conclude that establishing a dual-tier liability structure (a general cap pai
                 <BookmarkCheck className="w-4.5 h-4.5 text-black" />
                 <div>
                   <h3 className="text-xs font-bold font-mono uppercase text-gray-500">1. Select sources</h3>
-                  <p className="text-[11px] text-gray-400">Pick the databases, files, or websites LexLegis should consult.</p>
+                  <p className="text-[11px] text-gray-400">Pick the databases, files, or websites CookieCare should consult.</p>
                 </div>
               </div>
               <button 

@@ -1,0 +1,347 @@
+{
+  "users": [
+    {
+      "id": "krish_jain_id",
+      "email": "swarnaaishwarya17@gmail.com",
+      "name": "Krish Jain",
+      "passwordHash": "password123"
+    }
+  ],
+  "documents": [
+    {
+      "id": "doc_nda_sample",
+      "title": "CookieCare Mutual NDA (Standard)",
+      "type": "NDA",
+      "creatorId": "krish_jain_id",
+      "creatorEmail": "swarnaaishwarya17@gmail.com",
+      "content": "MUTUAL NON-DISCLOSURE AGREEMENT\n\nThis Mutual Non-Disclosure Agreement (this \"Agreement\") is entered into as of May 28, 2026, by and between CookieCare Corp, and the receiving business partner.\n\n1. PURPOSE\nThe parties wish to explore a business opportunity of mutual interest and in connection therewith, may disclose to each other certain confidential technical and business information.\n\n2. CONFIDENTIAL INFORMATION\n\"Confidential Information\" means any information disclosed by either party (the \"Disclosing Party\") to the other party (the \"Receiving Party\") that is marked as confidential or would logically be understood to be confidential under the circumstances.\n\n*CRITICAL CLAUSE EXCEPTION*\nNotwithstanding anything to the contrary, Disclosing Party shall have the unconditional right to audit Receiving Party's servers at any time without prior written notice (HIGH RISK EXCEPTION).\n\nBy no means shall either party disclose the Confidential Information to any third party for a duration of ten (10) years following termination of this Agreement (MEDIUM RISK CLAUSE).\n\n3. EXCLUSIONS\nConfidential Information does not include information that is:\n(a) in the public domain at the time of disclosure;\n(b) known to Receiving Party prior to receipt;\n(c) independently developed by Receiving Party without breach.\n\n4. REMEDIES\nIn the event of a breach, Disclosing Party is entitled to immediate injunctive relief and liquidated damages of a minimum of USD $5,000,000 without needing to prove actual damages (HIGH RISK REMEDY).\n\nIN WITNESS WHEREOF, the parties have executed this Agreement.\n\nCookieCare Corporation:\nSigner name: ___________________\nSignature: ______________________\n\nReceiving Party:\nSigner name: ___________________\nSignature: ______________________",
+      "isEncrypted": true,
+      "createdAt": "2026-05-29T15:20:06.615Z",
+      "updatedAt": "2026-05-29T15:20:06.615Z",
+      "versions": [
+        {
+          "version": 1,
+          "content": "MUTUAL NON-DISCLOSURE AGREEMENT\n\nThis Mutual Non-Disclosure Agreement (this \"Agreement\") is entered into as of May 28, 2026, by and between CookieCare Corp, and the receiving business partner.\n\n1. PURPOSE\nThe parties wish to explore a business opportunity of mutual interest and in connection therewith, may disclose to each other certain confidential technical and business information.\n\n2. CONFIDENTIAL INFORMATION\n\"Confidential Information\" means any information disclosed by either party (the \"Disclosing Party\") to the other party (the \"Receiving Party\") that is marked as confidential or would logically be understood to be confidential under the circumstances.\n\n*CRITICAL CLAUSE EXCEPTION*\nNotwithstanding anything to the contrary, Disclosing Party shall have the unconditional right to audit Receiving Party's servers at any time without prior written notice (HIGH RISK EXCEPTION).\n\nBy no means shall either party disclose the Confidential Information to any third party for a duration of ten (10) years following termination of this Agreement (MEDIUM RISK CLAUSE).\n\n3. EXCLUSIONS\nConfidential Information does not include information that is:\n(a) in the public domain at the time of disclosure;\n(b) known to Receiving Party prior to receipt;\n(c) independently developed by Receiving Party without breach.\n\n4. REMEDIES\nIn the event of a breach, Disclosing Party is entitled to immediate injunctive relief and liquidated damages of a minimum of USD $5,000,000 without needing to prove actual damages (HIGH RISK REMEDY).\n\nIN WITNESS WHEREOF, the parties have executed this Agreement.\n\nCookieCare Corporation:\nSigner name: ___________________\nSignature: ______________________\n\nReceiving Party:\nSigner name: ___________________\nSignature: ______________________",
+          "createdAt": "2026-05-29T15:20:06.615Z",
+          "author": "Krish Jain",
+          "comment": "Initial template loaded with severe risk points."
+        }
+      ],
+      "signatures": [
+        {
+          "signerEmail": "swarnaaishwarya17@gmail.com",
+          "signedAt": null,
+          "signatureHash": null,
+          "status": "pending"
+        }
+      ],
+      "redlines": [
+        {
+          "id": "redline_1",
+          "proposedByEmail": "external_partner@example.com",
+          "proposedAt": "2026-05-29T15:20:06.615Z",
+          "originalText": "liquidated damages of a minimum of USD $5,000,000 without needing to prove actual damages (HIGH RISK REMEDY)",
+          "proposedText": "reasonable actual direct damages proved in a court of competent jurisdiction",
+          "comment": "USD $5M liquidated damages trigger is highly punitive and unacceptable in mutual partnerships.",
+          "status": "pending"
+        }
+      ],
+      "sharedWith": [
+        "external_partner@example.com"
+      ],
+      "auditLogs": [
+        {
+          "timestamp": "2026-05-29T15:20:06.615Z",
+          "action": "Created",
+          "user": "Krish Jain",
+          "details": "Document initiated from NDA template."
+        },
+        {
+          "timestamp": "2026-05-29T15:20:06.615Z",
+          "action": "Encrypted",
+          "user": "System Workspace",
+          "details": "Encrypted document data at-rest using AES-Simulation."
+        }
+      ],
+      "analysis": {
+        "summary": "Standard NDA with overly aggressive Disclosing Party rights, punitive liquidated damages, and unlimited audit rights.",
+        "risks": [
+          {
+            "id": "risk_nda_1",
+            "clause": "unconditional right to audit Receiving Party's servers at any time without prior written notice",
+            "severity": "high",
+            "description": "Allows the disclosing business complete access to your cloud assets, potentially exposing third-party client properties or intellectual property.",
+            "actionableInsight": "Limit audits to once a year, with 15 business days prior notice, conducted during standard office hours by an independent certified accountant."
+          },
+          {
+            "id": "risk_nda_2",
+            "clause": "liquidated damages of a minimum of USD $5,000,000 without needing to prove actual damages",
+            "severity": "high",
+            "description": "Imposes a binding, disproportionate visual penalty on minor accidental information leaks without requiring any evidence of commercial loss.",
+            "actionableInsight": "Strike this liquidated damages claim entirely, leaving standard remedies for actionable breach details."
+          },
+          {
+            "id": "risk_nda_3",
+            "clause": "unconditional duration of ten (10) years following termination",
+            "severity": "medium",
+            "description": "A ten-year confidentiality duration is unreasonably long for general business and strategic talks, which standardly expire within three to five years.",
+            "actionableInsight": "Request a standard reduction of the duration to three (3) years post-termination."
+          }
+        ],
+        "complianceGaps": [
+          {
+            "regulation": "Standard Non-Disclosure Norms",
+            "complianceState": "gap",
+            "notes": "Mutual agreements usually lack non-proportional audit and high static penalties."
+          }
+        ]
+      }
+    },
+    {
+      "id": "doc_dpa_sample",
+      "title": "CookieCare GDPR DPA (Partner)",
+      "type": "DPA",
+      "creatorId": "krish_jain_id",
+      "creatorEmail": "swarnaaishwarya17@gmail.com",
+      "content": "DATA PROCESSING AGREEMENT (DPA)\n\nThis Data Processing Agreement (\"DPA\") governs the processing of personal data in connection with the Master Services Agreement between CookieCare Corp and customer.\n\n1. DEFINITIONS\n\"GDPR\" means the General Data Protection Regulation (Regulation (EU) 2016/679).\n\"Personal Data\", \"Controller\", \"Processor\", and \"Processing\" have the meanings given in the GDPR.\n\n2. PROCESSING OF PERSONAL DATA\nProcessor shall only process Personal Data on instructions from Controller. If Processor is required by law to process Personal Data otherwise, it shall prompt Controller unless prohibited by law.\n\n*NON-COMPLIANCE EXCEPTION*\nThe Processor reserves the right to share generic user logs and telemetry metadata with external advertisers with implied consent (HIGH SEVERITY PRIVACY GAP).\n\nSubprocessors may be engaged without prior notice to the Controller, and the Processor shall maintain an updated list on its public website (MEDIUM RISK SUBPROCESSOR GAP).\n\n3. SECURITY MEASURES\nProcessor shall implement appropriate technical and organizational measures to protect Personal Data against unauthorized access, destruction, or disclosure. Processor guarantees an SLA uptime of 99.0% for cloud sync nodes.\n\n4. AUDITS AND LIABILITY\nAny data privacy audit requested by Controller shall be performed at Controller's sole expense, and Controller may only request audits once every five (5) years (HIGH RISK AUDIT BARRIER).",
+      "isEncrypted": true,
+      "createdAt": "2026-05-29T15:20:06.615Z",
+      "updatedAt": "2026-05-29T15:20:06.615Z",
+      "versions": [
+        {
+          "version": 1,
+          "content": "DATA PROCESSING AGREEMENT (DPA)\n\nThis Data Processing Agreement (\"DPA\") governs the processing of personal data in connection with the Master Services Agreement between CookieCare Corp and customer.\n\n1. DEFINITIONS\n\"GDPR\" means the General Data Protection Regulation (Regulation (EU) 2016/679).\n\"Personal Data\", \"Controller\", \"Processor\", and \"Processing\" have the meanings given in the GDPR.\n\n2. PROCESSING OF PERSONAL DATA\nProcessor shall only process Personal Data on instructions from Controller. If Processor is required by law to process Personal Data otherwise, it shall prompt Controller unless prohibited by law.\n\n*NON-COMPLIANCE EXCEPTION*\nThe Processor reserves the right to share generic user logs and telemetry metadata with external advertisers with implied consent (HIGH SEVERITY PRIVACY GAP).\n\nSubprocessors may be engaged without prior notice to the Controller, and the Processor shall maintain an updated list on its public website (MEDIUM RISK SUBPROCESSOR GAP).\n\n3. SECURITY MEASURES\nProcessor shall implement appropriate technical and organizational measures to protect Personal Data against unauthorized access, destruction, or disclosure. Processor guarantees an SLA uptime of 99.0% for cloud sync nodes.\n\n4. AUDITS AND LIABILITY\nAny data privacy audit requested by Controller shall be performed at Controller's sole expense, and Controller may only request audits once every five (5) years (HIGH RISK AUDIT BARRIER).",
+          "createdAt": "2026-05-29T15:20:06.615Z",
+          "author": "Krish Jain",
+          "comment": "Initial GDPR template loaded with risk audit items."
+        }
+      ],
+      "signatures": [],
+      "redlines": [],
+      "sharedWith": [],
+      "auditLogs": [
+        {
+          "timestamp": "2026-05-29T15:20:06.615Z",
+          "action": "Created",
+          "user": "Krish Jain",
+          "details": "Document initiated from GDPR DPA template."
+        }
+      ],
+      "analysis": {
+        "summary": "GDPR validation showing major exceptions allowing unauthorized third-party telemetry sharing and overly prohibitive client audit clauses.",
+        "risks": [
+          {
+            "id": "risk_dpa_1",
+            "clause": "Processor reserves the right to share generic user logs and telemetry metadata with external advertisers",
+            "severity": "high",
+            "description": "Direct violation of GDPR Article 6/9 principles. Processors cannot share client telemetry data for advertising purposes without explicit, affirmative consent.",
+            "actionableInsight": "Remove this exception entirely. The Processor must only process data on written instructions of the Controller."
+          },
+          {
+            "id": "risk_dpa_2",
+            "clause": "Controller may only request audits once every five (5) years and at Controller's sole expense",
+            "severity": "high",
+            "description": "Violates GDPR Article 28(3)(h). Data controllers are entitled to audit compliance on annual schedules or immediately following suspect data incidents.",
+            "actionableInsight": "Rewrite to allow annual audit options, with costs allocated individually or shared dynamically."
+          },
+          {
+            "id": "risk_dpa_3",
+            "clause": "Subprocessors may be engaged without prior notice to the Controller",
+            "severity": "medium",
+            "description": "Lack of notification violates GDPR consent. Controllers must be permitted to object to any new subprocessor additions.",
+            "actionableInsight": "Amend to require 30 business days notice of any prospective subprocessor change to object."
+          }
+        ],
+        "complianceGaps": [
+          {
+            "regulation": "GDPR Article 28 Compliance",
+            "complianceState": "gap",
+            "notes": "Audit schedules restricted unreasonably and subprocessor updates lack immediate controller vetoes."
+          }
+        ]
+      }
+    },
+    {
+      "id": "doc_0r9ikbdbi",
+      "title": "Mutual Non-Disclosure Agreement",
+      "type": "Custom",
+      "creatorId": "user_xjh00q3dz",
+      "creatorEmail": "s.aishwaryaa.22@gmail.com",
+      "content": "LEXENC_TVVUVUFMIE5PTi1ESVNDTE9TVVJFIEFHUkVFTUVOVAoKVEhJUyBBR1JFRU1FTlQgaXMgbWFkZSBvbiBb4pePIERBVEUgSW5zZXJ0IHRoZSBkYXRlIG9mIGV4ZWN1dGlvbiBvZiB0aGlzIEFncmVlbWVudF0KCkJFVFdFRU46CgpMZXhMZWdpcyBDbGllbnQgYSBjb21wYW55IGluY29ycG9yYXRlZCB1bmRlciBDYWxpZm9ybmlhIFJlZ2lzdHJ5IGhhdmluZyBpdHMgcmVnaXN0ZXJlZCBvZmZpY2UgYXQgUmVkd29vZCBDaXR5IE9mZmljZXMgKGhlcmVpbmFmdGVyIHJlZmVycmVkIHRvIGFzICJQYXJ0eSBBIiB3aGljaCBleHByZXNzaW9uIHNoYWxsLCB1bmxlc3MgcmVwdWduYW50IHRvIHRoZSBjb250ZXh0IG9yIG1lYW5pbmcgdGhlcmVvZiwgaW5jbHVkZSBpdHMgc3VjY2Vzc29ycyBhbmQgcGVybWl0dGVkIGFzc2lnbnMpCgpBTkQKCkUtQ29tbWVyY2UgVmVuZG9yIGEgY29tcGFueSBpbmNvcnBvcmF0ZWQgdW5kZXIgQ2FsaWZvcm5pYSBSZWdpc3RyeSBoYXZpbmcgaXRzIHJlZ2lzdGVyZWQgb2ZmaWNlIGF0IFJlZHdvb2QgQ2l0eSBPZmZpY2VzIChoZXJlaW5hZnRlciByZWZlcnJlZCB0byBhcyAiUGFydHkgQiIgd2hpY2ggZXhwcmVzc2lvbiBzaGFsbCwgdW5sZXNzIHJlcHVnbmFudCB0byB0aGUgY29udGV4dCBvciBtZWFuaW5nIHRoZXJlb2YsIGluY2x1ZGUgaXRzIHN1Y2Nlc3NvcnMgYW5kIHBlcm1pdHRlZCBhc3NpZ25zKQoKUGFydHkgQSBhbmQgUGFydHkgQiBhcmUgaGVyZWluYWZ0ZXIgaW5kaXZpZHVhbGx5IHJlZmVycmVkIHRvIGFzIGEgIlBhcnR5IiBhbmQgY29sbGVjdGl2ZWx5IGFzIHRoZSAiUGFydGllcyIuCgpSRUNJVEFMUzoKMS4gVGhlIFBhcnRpZXMgYXJlIGV4cGxvcmluZyBhIHBvdGVudGlhbCBidXNpbmVzcyByZWxhdGlvbnNoaXAgb3IgdHJhbnNhY3Rpb24gKHRoZSAiUHVycG9zZSIpLgoyLiBJbiBjb25uZWN0aW9uIHdpdGggdGhlIFB1cnBvc2UsIGVhY2ggUGFydHkgbWF5IGRpc2Nsb3NlIHByb3ByaWV0YXJ5IGFuZCBjb25maWRlbnRpYWwgdHJhZGUgc2VjcmV0cywgc3RyYXRlZ2ljIHBsYW5zLCBhbmQgdGVjaG5vbG9neSBkYXRhc2V0cyB0byB0aGUgb3RoZXIgUGFydHkuCgpOb3cgdGhlcmVmb3JlLCB0aGUgUGFydGllcyBhZ3JlZSBhcyBmb2xsb3dzOgoKMS4gREVGSU5JVElPTlMgJiBJTlRFUlBSRVRBVElPTgoKMS4xICJDb25maWRlbnRpYWwgSW5mb3JtYXRpb24iIG1lYW5zIGFueSBhbmQgYWxsIGluZm9ybWF0aW9uIGRpc2Nsb3NlZCBieSBvciBvbiBiZWhhbGYgb2YgYSBQYXJ0eSAodGhlICJEaXNjbG9zaW5nIFBhcnR5IikgdG8gdGhlIG90aGVyIFBhcnR5ICh0aGUgIlJlY2VpdmluZyBQYXJ0eSIpIHRoYXQgaXMgbWFya2VkIGFzIGNvbmZpZGVudGlhbCBvciB3b3VsZCByZWFzb25hYmx5IGJlIHVuZGVyc3Rvb2QgdG8gYmUgY29uZmlkZW50aWFsIHVuZGVyIHRoZSBjaXJjdW1zdGFuY2VzIG9mIGRpc2Nsb3N1cmUuCgoyLiBPQkxJR0FUSU9OUyBPRiBOT04tRElTQ0xPU1VSRQoKMi4xIFRoZSBSZWNlaXZpbmcgUGFydHkgc2hhbGwgaG9sZCBhbGwgQ29uZmlkZW50aWFsIEluZm9ybWF0aW9uIGluIHN0cmljdCBjb25maWRlbmNlIGFuZCBzaGFsbCBub3QsIHdpdGhvdXQgdGhlIHByaW9yIHdyaXR0ZW4gY29uc2VudCBvZiB0aGUgRGlzY2xvc2luZyBQYXJ0eSwgZGlzY2xvc2UsIGRpc3NlbWluYXRlLCBvciBwdWJsaXNoIHN1Y2ggQ29uZmlkZW50aWFsIEluZm9ybWF0aW9uIHRvIGFueSB0aGlyZCBwYXJ0eS4KCjMuIElOVEVMTEVDVFVBTCBQUk9QRVJUWSBSSUdIVFMKCjMuMSBBbGwgQ29uZmlkZW50aWFsIEluZm9ybWF0aW9uIGRpc2Nsb3NlZCBieSBhIFBhcnR5IHNoYWxsIHJlbWFpbiB0aGUgcHJvcGVydHkgb2YgdGhlIERpc2Nsb3NpbmcgUGFydHkuIE5vdGhpbmcgaW4gdGhpcyBBZ3JlZW1lbnQgc2hhbGwgYmUgY29uc3RydWVkIGFzIGdyYW50aW5nIGFueSByaWdodHMsIGJ5IGxpY2VuY2Ugb3Igb3RoZXJ3aXNlLCB0byBhbnkgQ29uZmlkZW50aWFsIEluZm9ybWF0aW9uIG9yIGFueSBpbnRlbGxlY3R1YWwgcHJvcGVydHkgcmlnaHRzIHRoZXJlaW4uCgozLjIgTm8gbGljZW5jZSBvciBvdGhlciByaWdodCBpcyBncmFudGVkIGJ5IHRoaXMgQWdyZWVtZW50IGluIHJlc3BlY3Qgb2YgYW55IHBhdGVudCwgY29weXJpZ2h0LCB0cmFkZSBtYXJrLCB0cmFkZSBzZWNyZXQsIG9yIG90aGVyIGludGVsbGVjdHVhbCBwcm9wZXJ0eSByaWdodC4KCjQuIFJFVFVSTiBPUiBERVNUUlVDVElPTiBPRiBDT05GSURFTlRJQUwgSU5GT1JNQVRJT04KCjQuMSBVcG9uIHRoZSB3cml0dGVuIHJlcXVlc3Qgb2YgdGhlIERpc2Nsb3NpbmcgUGFydHkgb3IgdXBvbiB0aGUgdGVybWluYXRpb24gb2YgdGhpcyBBZ3JlZW1lbnQsIHRoZSBSZWNlaXZpbmcgUGFydHkgc2hhbGwsIGF0IHRoZSBEaXNjbG9zaW5nIFBhcnR5J3Mgb3B0aW9uOgooYSkgcHJvbXB0bHkgcmV0dXJuIHRvIHRoZSBEaXNjbG9zaW5nIFBhcnR5IGFsbCBkb2N1bWVudHMgYW5kIG1hdGVyaWFscyBjb250YWluaW5nIG9yIHJlZmxlY3RpbmcgYW55IENvbmZpZGVudGlhbCBJbmZvcm1hdGlvbjsgYW5kL29yCihiKSBkZXN0cm95IGFsbCBzdWNoIGRvY3VtZW50cyBhbmQgbWF0ZXJpYWxzIGFuZCBjZXJ0aWZ5IGluIHdyaXRpbmcgdG8gdGhlIERpc2Nsb3NpbmcgUGFydHkgdGhhdCBzdWNoIGRlc3RydWN0aW9uIGhhcyBiZWVuIGNvbXBsZXRlZC4K",
+      "isEncrypted": true,
+      "createdAt": "2026-05-29T15:37:45.558Z",
+      "updatedAt": "2026-05-29T15:37:47.020Z",
+      "versions": [
+        {
+          "version": 1,
+          "content": "LEXENC_QkxBTksgQ3VzdG9tIExFR0FMIEFHUkVFTUVOVAoKRHJhZnQgY3JlYXRlZCBvbiAyMDI2LTA1LTI5VDE1OjM3OjQ1LjM1M1o=",
+          "createdAt": "2026-05-29T15:37:45.353Z",
+          "author": "aish",
+          "comment": "Created Custom from workspace template"
+        },
+        {
+          "version": 2,
+          "content": "LEXENC_TVVUVUFMIE5PTi1ESVNDTE9TVVJFIEFHUkVFTUVOVAoKVEhJUyBBR1JFRU1FTlQgaXMgbWFkZSBvbiBb4pePIERBVEUgSW5zZXJ0IHRoZSBkYXRlIG9mIGV4ZWN1dGlvbiBvZiB0aGlzIEFncmVlbWVudF0KCkJFVFdFRU46CgpMZXhMZWdpcyBDbGllbnQgYSBjb21wYW55IGluY29ycG9yYXRlZCB1bmRlciBDYWxpZm9ybmlhIFJlZ2lzdHJ5IGhhdmluZyBpdHMgcmVnaXN0ZXJlZCBvZmZpY2UgYXQgUmVkd29vZCBDaXR5IE9mZmljZXMgKGhlcmVpbmFmdGVyIHJlZmVycmVkIHRvIGFzICJQYXJ0eSBBIiB3aGljaCBleHByZXNzaW9uIHNoYWxsLCB1bmxlc3MgcmVwdWduYW50IHRvIHRoZSBjb250ZXh0IG9yIG1lYW5pbmcgdGhlcmVvZiwgaW5jbHVkZSBpdHMgc3VjY2Vzc29ycyBhbmQgcGVybWl0dGVkIGFzc2lnbnMpCgpBTkQKCkUtQ29tbWVyY2UgVmVuZG9yIGEgY29tcGFueSBpbmNvcnBvcmF0ZWQgdW5kZXIgQ2FsaWZvcm5pYSBSZWdpc3RyeSBoYXZpbmcgaXRzIHJlZ2lzdGVyZWQgb2ZmaWNlIGF0IFJlZHdvb2QgQ2l0eSBPZmZpY2VzIChoZXJlaW5hZnRlciByZWZlcnJlZCB0byBhcyAiUGFydHkgQiIgd2hpY2ggZXhwcmVzc2lvbiBzaGFsbCwgdW5sZXNzIHJlcHVnbmFudCB0byB0aGUgY29udGV4dCBvciBtZWFuaW5nIHRoZXJlb2YsIGluY2x1ZGUgaXRzIHN1Y2Nlc3NvcnMgYW5kIHBlcm1pdHRlZCBhc3NpZ25zKQoKUGFydHkgQSBhbmQgUGFydHkgQiBhcmUgaGVyZWluYWZ0ZXIgaW5kaXZpZHVhbGx5IHJlZmVycmVkIHRvIGFzIGEgIlBhcnR5IiBhbmQgY29sbGVjdGl2ZWx5IGFzIHRoZSAiUGFydGllcyIuCgpSRUNJVEFMUzoKMS4gVGhlIFBhcnRpZXMgYXJlIGV4cGxvcmluZyBhIHBvdGVudGlhbCBidXNpbmVzcyByZWxhdGlvbnNoaXAgb3IgdHJhbnNhY3Rpb24gKHRoZSAiUHVycG9zZSIpLgoyLiBJbiBjb25uZWN0aW9uIHdpdGggdGhlIFB1cnBvc2UsIGVhY2ggUGFydHkgbWF5IGRpc2Nsb3NlIHByb3ByaWV0YXJ5IGFuZCBjb25maWRlbnRpYWwgdHJhZGUgc2VjcmV0cywgc3RyYXRlZ2ljIHBsYW5zLCBhbmQgdGVjaG5vbG9neSBkYXRhc2V0cyB0byB0aGUgb3RoZXIgUGFydHkuCgpOb3cgdGhlcmVmb3JlLCB0aGUgUGFydGllcyBhZ3JlZSBhcyBmb2xsb3dzOgoKMS4gREVGSU5JVElPTlMgJiBJTlRFUlBSRVRBVElPTgoKMS4xICJDb25maWRlbnRpYWwgSW5mb3JtYXRpb24iIG1lYW5zIGFueSBhbmQgYWxsIGluZm9ybWF0aW9uIGRpc2Nsb3NlZCBieSBvciBvbiBiZWhhbGYgb2YgYSBQYXJ0eSAodGhlICJEaXNjbG9zaW5nIFBhcnR5IikgdG8gdGhlIG90aGVyIFBhcnR5ICh0aGUgIlJlY2VpdmluZyBQYXJ0eSIpIHRoYXQgaXMgbWFya2VkIGFzIGNvbmZpZGVudGlhbCBvciB3b3VsZCByZWFzb25hYmx5IGJlIHVuZGVyc3Rvb2QgdG8gYmUgY29uZmlkZW50aWFsIHVuZGVyIHRoZSBjaXJjdW1zdGFuY2VzIG9mIGRpc2Nsb3N1cmUuCgoyLiBPQkxJR0FUSU9OUyBPRiBOT04tRElTQ0xPU1VSRQoKMi4xIFRoZSBSZWNlaXZpbmcgUGFydHkgc2hhbGwgaG9sZCBhbGwgQ29uZmlkZW50aWFsIEluZm9ybWF0aW9uIGluIHN0cmljdCBjb25maWRlbmNlIGFuZCBzaGFsbCBub3QsIHdpdGhvdXQgdGhlIHByaW9yIHdyaXR0ZW4gY29uc2VudCBvZiB0aGUgRGlzY2xvc2luZyBQYXJ0eSwgZGlzY2xvc2UsIGRpc3NlbWluYXRlLCBvciBwdWJsaXNoIHN1Y2ggQ29uZmlkZW50aWFsIEluZm9ybWF0aW9uIHRvIGFueSB0aGlyZCBwYXJ0eS4KCjMuIElOVEVMTEVDVFVBTCBQUk9QRVJUWSBSSUdIVFMKCjMuMSBBbGwgQ29uZmlkZW50aWFsIEluZm9ybWF0aW9uIGRpc2Nsb3NlZCBieSBhIFBhcnR5IHNoYWxsIHJlbWFpbiB0aGUgcHJvcGVydHkgb2YgdGhlIERpc2Nsb3NpbmcgUGFydHkuIE5vdGhpbmcgaW4gdGhpcyBBZ3JlZW1lbnQgc2hhbGwgYmUgY29uc3RydWVkIGFzIGdyYW50aW5nIGFueSByaWdodHMsIGJ5IGxpY2VuY2Ugb3Igb3RoZXJ3aXNlLCB0byBhbnkgQ29uZmlkZW50aWFsIEluZm9ybWF0aW9uIG9yIGFueSBpbnRlbGxlY3R1YWwgcHJvcGVydHkgcmlnaHRzIHRoZXJlaW4uCgozLjIgTm8gbGljZW5jZSBvciBvdGhlciByaWdodCBpcyBncmFudGVkIGJ5IHRoaXMgQWdyZWVtZW50IGluIHJlc3BlY3Qgb2YgYW55IHBhdGVudCwgY29weXJpZ2h0LCB0cmFkZSBtYXJrLCB0cmFkZSBzZWNyZXQsIG9yIG90aGVyIGludGVsbGVjdHVhbCBwcm9wZXJ0eSByaWdodC4KCjQuIFJFVFVSTiBPUiBERVNUUlVDVElPTiBPRiBDT05GSURFTlRJQUwgSU5GT1JNQVRJT04KCjQuMSBVcG9uIHRoZSB3cml0dGVuIHJlcXVlc3Qgb2YgdGhlIERpc2Nsb3NpbmcgUGFydHkgb3IgdXBvbiB0aGUgdGVybWluYXRpb24gb2YgdGhpcyBBZ3JlZW1lbnQsIHRoZSBSZWNlaXZpbmcgUGFydHkgc2hhbGwsIGF0IHRoZSBEaXNjbG9zaW5nIFBhcnR5J3Mgb3B0aW9uOgooYSkgcHJvbXB0bHkgcmV0dXJuIHRvIHRoZSBEaXNjbG9zaW5nIFBhcnR5IGFsbCBkb2N1bWVudHMgYW5kIG1hdGVyaWFscyBjb250YWluaW5nIG9yIHJlZmxlY3RpbmcgYW55IENvbmZpZGVudGlhbCBJbmZvcm1hdGlvbjsgYW5kL29yCihiKSBkZXN0cm95IGFsbCBzdWNoIGRvY3VtZW50cyBhbmQgbWF0ZXJpYWxzIGFuZCBjZXJ0aWZ5IGluIHdyaXRpbmcgdG8gdGhlIERpc2Nsb3NpbmcgUGFydHkgdGhhdCBzdWNoIGRlc3RydWN0aW9uIGhhcyBiZWVuIGNvbXBsZXRlZC4K",
+          "createdAt": "2026-05-29T15:37:47.020Z",
+          "author": "aish",
+          "comment": "Multi-agent corporate flow ingested."
+        }
+      ],
+      "signatures": [],
+      "redlines": [],
+      "sharedWith": [],
+      "auditLogs": [
+        {
+          "timestamp": "2026-05-29T15:37:45.353Z",
+          "action": "Created",
+          "user": "aish",
+          "details": "Agreement initialized with Custom template."
+        },
+        {
+          "timestamp": "2026-05-29T15:37:45.353Z",
+          "action": "Encrypted",
+          "user": "System Encryption Core",
+          "details": "Encrypted at-rest on secure cloud storage partition."
+        },
+        {
+          "timestamp": "2026-05-29T15:37:47.020Z",
+          "action": "Updated Content",
+          "user": "aish",
+          "details": "Multi-agent corporate flow ingested."
+        }
+      ],
+      "analysis": null
+    },
+    {
+      "id": "doc_l8ghn14i5",
+      "title": "randstad mutual NDA 2026",
+      "type": "DPA",
+      "creatorId": "user_xjh00q3dz",
+      "creatorEmail": "s.aishwaryaa.22@gmail.com",
+      "content": "LEXENC_REFUQSBQUk9DRVNTSU5HIEFHUkVFTUVOVCAoRFBBKQoKVGhpcyBEYXRhIFByb2Nlc3NpbmcgQWdyZWVtZW50ICgiRFBBIikgZ292ZXJucyB0aGUgcHJvY2Vzc2luZyBvZiBwZXJzb25hbCBkYXRhIGluIGNvbm5lY3Rpb24gd2l0aCB0aGUgTWFzdGVyIFNlcnZpY2VzIEFncmVlbWVudCBiZXR3ZWVuIExleExlZ2lzIENvcnAgYW5kIGN1c3RvbWVyLgoKMS4gREVGSU5JVElPTlMKIkdEUFIiIG1lYW5zIHRoZSBHZW5lcmFsIERhdGEgUHJvdGVjdGlvbiBSZWd1bGF0aW9uIChSZWd1bGF0aW9uIChFVSkgMjAxNi82NzkpLgoiUGVyc29uYWwgRGF0YSIsICJDb250cm9sbGVyIiwgIlByb2Nlc3NvciIsIGFuZCAiUHJvY2Vzc2luZyIgaGF2ZSB0aGUgbWVhbmluZ3MgZ2l2ZW4gaW4gdGhlIEdEUFIuCgoyLiBQUk9DRVNTSU5HIE9GIFBFUlNPTkFMIERBVEEKUHJvY2Vzc29yIHNoYWxsIG9ubHkgcHJvY2VzcyBQZXJzb25hbCBEYXRhIG9uIGluc3RydWN0aW9ucyBmcm9tIENvbnRyb2xsZXIuIElmIFByb2Nlc3NvciBpcyByZXF1aXJlZCBieSBsYXcgdG8gcHJvY2VzcyBQZXJzb25hbCBEYXRhIG90aGVyd2lzZSwgaXQgc2hhbGwgcHJvbXB0IENvbnRyb2xsZXIgdW5sZXNzIHByb2hpYml0ZWQgYnkgbGF3LgoKKk5PTi1DT01QTElBTkNFIEVYQ0VQVElPTioKUHJvY2Vzc29yIHNoYWxsIG5vdCBzaGFyZSBnZW5lcmljIHVzZXIgbG9ncywgdGVsZW1ldHJ5LCBvciBtZXRhZGF0YSB3aXRoIHRoaXJkLXBhcnR5IG5ldHdvcmtzLCBhZHZlcnRpc2Vycywgb3Igb3RoZXIgZXh0ZXJuYWwgZW50aXRpZXMgd2l0aG91dCB0aGUgQ29udHJvbGxlcidzIGV4cGxpY2l0LCBwcmlvciB3cml0dGVuIGNvbnNlbnQuCgpTdWJwcm9jZXNzb3JzIG1heSBiZSBlbmdhZ2VkIHdpdGhvdXQgcHJpb3Igbm90aWNlIHRvIHRoZSBDb250cm9sbGVyLCBhbmQgdGhlIFByb2Nlc3NvciBzaGFsbCBtYWludGFpbiBhbiB1cGRhdGVkIGxpc3Qgb24gaXRzIHB1YmxpYyB3ZWJzaXRlIChNRURJVU0gUklTSyBTVUJQUk9DRVNTT1IgR0FQKS4KCjMuIFNFQ1VSSVRZIE1FQVNVUkVTClByb2Nlc3NvciBzaGFsbCBpbXBsZW1lbnQgYXBwcm9wcmlhdGUgdGVjaG5pY2FsIGFuZCBvcmdhbml6YXRpb25hbCBtZWFzdXJlcyB0byBwcm90ZWN0IFBlcnNvbmFsIERhdGEgYWdhaW5zdCB1bmF1dGhvcml6ZWQgYWNjZXNzLCBkZXN0cnVjdGlvbiwgb3IgZGlzY2xvc3VyZS4gUHJvY2Vzc29yIGd1YXJhbnRlZXMgYW4gU0xBIHVwdGltZSBvZiA5OS4wJSBmb3IgY2xvdWQgc3luYyBub2Rlcy4KCjQuIEFVRElUUyBBTkQgTElBQklMSVRZCkFueSBkYXRhIHByaXZhY3kgYXVkaXQgcmVxdWVzdGVkIGJ5IENvbnRyb2xsZXIgc2hhbGwgYmUgcGVyZm9ybWVkIGF0IENvbnRyb2xsZXIncyBzb2xlIGV4cGVuc2UsIGFuZCBDb250cm9sbGVyIG1heSBvbmx5IHJlcXVlc3QgYXVkaXRzIG9uY2UgZXZlcnkgZml2ZSAoNSkgeWVhcnMgKEhJR0ggUklTSyBBVURJVCBCQVJSSUVSKS4=",
+      "isEncrypted": true,
+      "createdAt": "2026-05-29T15:56:57.886Z",
+      "updatedAt": "2026-05-29T16:00:57.166Z",
+      "versions": [
+        {
+          "version": 1,
+          "content": "LEXENC_REFUQSBQUk9DRVNTSU5HIEFHUkVFTUVOVCAoRFBBKQoKVGhpcyBEYXRhIFByb2Nlc3NpbmcgQWdyZWVtZW50ICgiRFBBIikgZ292ZXJucyB0aGUgcHJvY2Vzc2luZyBvZiBwZXJzb25hbCBkYXRhIGluIGNvbm5lY3Rpb24gd2l0aCB0aGUgTWFzdGVyIFNlcnZpY2VzIEFncmVlbWVudCBiZXR3ZWVuIExleExlZ2lzIENvcnAgYW5kIGN1c3RvbWVyLgoKMS4gREVGSU5JVElPTlMKIkdEUFIiIG1lYW5zIHRoZSBHZW5lcmFsIERhdGEgUHJvdGVjdGlvbiBSZWd1bGF0aW9uIChSZWd1bGF0aW9uIChFVSkgMjAxNi82NzkpLgoiUGVyc29uYWwgRGF0YSIsICJDb250cm9sbGVyIiwgIlByb2Nlc3NvciIsIGFuZCAiUHJvY2Vzc2luZyIgaGF2ZSB0aGUgbWVhbmluZ3MgZ2l2ZW4gaW4gdGhlIEdEUFIuCgoyLiBQUk9DRVNTSU5HIE9GIFBFUlNPTkFMIERBVEEKUHJvY2Vzc29yIHNoYWxsIG9ubHkgcHJvY2VzcyBQZXJzb25hbCBEYXRhIG9uIGluc3RydWN0aW9ucyBmcm9tIENvbnRyb2xsZXIuIElmIFByb2Nlc3NvciBpcyByZXF1aXJlZCBieSBsYXcgdG8gcHJvY2VzcyBQZXJzb25hbCBEYXRhIG90aGVyd2lzZSwgaXQgc2hhbGwgcHJvbXB0IENvbnRyb2xsZXIgdW5sZXNzIHByb2hpYml0ZWQgYnkgbGF3LgoKKk5PTi1DT01QTElBTkNFIEVYQ0VQVElPTioKVGhlIFByb2Nlc3NvciByZXNlcnZlcyB0aGUgcmlnaHQgdG8gc2hhcmUgZ2VuZXJpYyB1c2VyIGxvZ3MgYW5kIHRlbGVtZXRyeSBtZXRhZGF0YSB3aXRoIGV4dGVybmFsIGFkdmVydGlzZXJzIHdpdGggaW1wbGllZCBjb25zZW50IChISUdIIFNFVkVSSVRZIFBSSVZBQ1kgR0FQKS4KClN1YnByb2Nlc3NvcnMgbWF5IGJlIGVuZ2FnZWQgd2l0aG91dCBwcmlvciBub3RpY2UgdG8gdGhlIENvbnRyb2xsZXIsIGFuZCB0aGUgUHJvY2Vzc29yIHNoYWxsIG1haW50YWluIGFuIHVwZGF0ZWQgbGlzdCBvbiBpdHMgcHVibGljIHdlYnNpdGUgKE1FRElVTSBSSVNLIFNVQlBST0NFU1NPUiBHQVApLgoKMy4gU0VDVVJJVFkgTUVBU1VSRVMKUHJvY2Vzc29yIHNoYWxsIGltcGxlbWVudCBhcHByb3ByaWF0ZSB0ZWNobmljYWwgYW5kIG9yZ2FuaXphdGlvbmFsIG1lYXN1cmVzIHRvIHByb3RlY3QgUGVyc29uYWwgRGF0YSBhZ2FpbnN0IHVuYXV0aG9yaXplZCBhY2Nlc3MsIGRlc3RydWN0aW9uLCBvciBkaXNjbG9zdXJlLiBQcm9jZXNzb3IgZ3VhcmFudGVlcyBhbiBTTEEgdXB0aW1lIG9mIDk5LjAlIGZvciBjbG91ZCBzeW5jIG5vZGVzLgoKNC4gQVVESVRTIEFORCBMSUFCSUxJVFkKQW55IGRhdGEgcHJpdmFjeSBhdWRpdCByZXF1ZXN0ZWQgYnkgQ29udHJvbGxlciBzaGFsbCBiZSBwZXJmb3JtZWQgYXQgQ29udHJvbGxlcidzIHNvbGUgZXhwZW5zZSwgYW5kIENvbnRyb2xsZXIgbWF5IG9ubHkgcmVxdWVzdCBhdWRpdHMgb25jZSBldmVyeSBmaXZlICg1KSB5ZWFycyAoSElHSCBSSVNLIEFVRElUIEJBUlJJRVIpLg==",
+          "createdAt": "2026-05-29T15:56:57.672Z",
+          "author": "aish",
+          "comment": "Created DPA from workspace template"
+        },
+        {
+          "version": 2,
+          "content": "LEXENC_REFUQSBQUk9DRVNTSU5HIEFHUkVFTUVOVCAoRFBBKQoKVGhpcyBEYXRhIFByb2Nlc3NpbmcgQWdyZWVtZW50ICgiRFBBIikgZ292ZXJucyB0aGUgcHJvY2Vzc2luZyBvZiBwZXJzb25hbCBkYXRhIGluIGNvbm5lY3Rpb24gd2l0aCB0aGUgTWFzdGVyIFNlcnZpY2VzIEFncmVlbWVudCBiZXR3ZWVuIExleExlZ2lzIENvcnAgYW5kIGN1c3RvbWVyLgoKMS4gREVGSU5JVElPTlMKIkdEUFIiIG1lYW5zIHRoZSBHZW5lcmFsIERhdGEgUHJvdGVjdGlvbiBSZWd1bGF0aW9uIChSZWd1bGF0aW9uIChFVSkgMjAxNi82NzkpLgoiUGVyc29uYWwgRGF0YSIsICJDb250cm9sbGVyIiwgIlByb2Nlc3NvciIsIGFuZCAiUHJvY2Vzc2luZyIgaGF2ZSB0aGUgbWVhbmluZ3MgZ2l2ZW4gaW4gdGhlIEdEUFIuCgoyLiBQUk9DRVNTSU5HIE9GIFBFUlNPTkFMIERBVEEKUHJvY2Vzc29yIHNoYWxsIG9ubHkgcHJvY2VzcyBQZXJzb25hbCBEYXRhIG9uIGluc3RydWN0aW9ucyBmcm9tIENvbnRyb2xsZXIuIElmIFByb2Nlc3NvciBpcyByZXF1aXJlZCBieSBsYXcgdG8gcHJvY2VzcyBQZXJzb25hbCBEYXRhIG90aGVyd2lzZSwgaXQgc2hhbGwgcHJvbXB0IENvbnRyb2xsZXIgdW5sZXNzIHByb2hpYml0ZWQgYnkgbGF3LgoKKk5PTi1DT01QTElBTkNFIEVYQ0VQVElPTioKUHJvY2Vzc29yIHNoYWxsIG5vdCBzaGFyZSBnZW5lcmljIHVzZXIgbG9ncywgdGVsZW1ldHJ5LCBvciBtZXRhZGF0YSB3aXRoIHRoaXJkLXBhcnR5IG5ldHdvcmtzLCBhZHZlcnRpc2Vycywgb3Igb3RoZXIgZXh0ZXJuYWwgZW50aXRpZXMgd2l0aG91dCB0aGUgQ29udHJvbGxlcidzIGV4cGxpY2l0LCBwcmlvciB3cml0dGVuIGNvbnNlbnQuCgpTdWJwcm9jZXNzb3JzIG1heSBiZSBlbmdhZ2VkIHdpdGhvdXQgcHJpb3Igbm90aWNlIHRvIHRoZSBDb250cm9sbGVyLCBhbmQgdGhlIFByb2Nlc3NvciBzaGFsbCBtYWludGFpbiBhbiB1cGRhdGVkIGxpc3Qgb24gaXRzIHB1YmxpYyB3ZWJzaXRlIChNRURJVU0gUklTSyBTVUJQUk9DRVNTT1IgR0FQKS4KCjMuIFNFQ1VSSVRZIE1FQVNVUkVTClByb2Nlc3NvciBzaGFsbCBpbXBsZW1lbnQgYXBwcm9wcmlhdGUgdGVjaG5pY2FsIGFuZCBvcmdhbml6YXRpb25hbCBtZWFzdXJlcyB0byBwcm90ZWN0IFBlcnNvbmFsIERhdGEgYWdhaW5zdCB1bmF1dGhvcml6ZWQgYWNjZXNzLCBkZXN0cnVjdGlvbiwgb3IgZGlzY2xvc3VyZS4gUHJvY2Vzc29yIGd1YXJhbnRlZXMgYW4gU0xBIHVwdGltZSBvZiA5OS4wJSBmb3IgY2xvdWQgc3luYyBub2Rlcy4KCjQuIEFVRElUUyBBTkQgTElBQklMSVRZCkFueSBkYXRhIHByaXZhY3kgYXVkaXQgcmVxdWVzdGVkIGJ5IENvbnRyb2xsZXIgc2hhbGwgYmUgcGVyZm9ybWVkIGF0IENvbnRyb2xsZXIncyBzb2xlIGV4cGVuc2UsIGFuZCBDb250cm9sbGVyIG1heSBvbmx5IHJlcXVlc3QgYXVkaXRzIG9uY2UgZXZlcnkgZml2ZSAoNSkgeWVhcnMgKEhJR0ggUklTSyBBVURJVCBCQVJSSUVSKS4=",
+          "createdAt": "2026-05-29T16:00:57.166Z",
+          "author": "aish",
+          "comment": "Accepted redline proposed by s.aishwaryaa.22@gmail.com"
+        }
+      ],
+      "signatures": [],
+      "redlines": [
+        {
+          "id": "rl_ssmvgdcsx",
+          "proposedByEmail": "s.aishwaryaa.22@gmail.com",
+          "proposedAt": "2026-05-29T16:00:56.863Z",
+          "originalText": "The Processor reserves the right to share generic user logs and telemetry metadata with external advertisers with implied consent (HIGH SEVERITY PRIVACY GAP).",
+          "proposedText": "Processor shall not share generic user logs, telemetry, or metadata with third-party networks, advertisers, or other external entities without the Controller's explicit, prior written consent.",
+          "comment": "[Merged via AI Multi-Agent Audit]: Sharing telemetry or user logs with external advertisers violates core privacy principles. Golden Standards require that telemetry data is not shared with third-party networks without explicit consent.",
+          "status": "accepted"
+        }
+      ],
+      "sharedWith": [],
+      "auditLogs": [
+        {
+          "timestamp": "2026-05-29T15:56:57.672Z",
+          "action": "Created",
+          "user": "aish",
+          "details": "Agreement initialized with DPA template."
+        },
+        {
+          "timestamp": "2026-05-29T15:56:57.672Z",
+          "action": "Encrypted",
+          "user": "System Encryption Core",
+          "details": "Encrypted at-rest on secure cloud storage partition."
+        },
+        {
+          "timestamp": "2026-05-29T16:00:56.863Z",
+          "action": "Redlined Proposed",
+          "user": "aish",
+          "details": "Proposed replacement: \"The Processor reserves the right to share generic user logs and telemetry metadata with external advertisers with implied consent (HIGH SEVERITY PRIVACY GAP).\" with \"Processor shall not share generic user logs, telemetry, or metadata with third-party networks, advertisers, or other external entities without the Controller's explicit, prior written consent.\""
+        },
+        {
+          "timestamp": "2026-05-29T16:00:57.166Z",
+          "action": "Redline Accepted",
+          "user": "aish",
+          "details": "Merged replacement proposed by s.aishwaryaa.22@gmail.com into document text."
+        }
+      ],
+      "analysis": null
+    },
+    {
+      "id": "doc_qegngh681",
+      "title": "randstad mutual NDA 2026",
+      "type": "DPA",
+      "creatorId": "user_xjh00q3dz",
+      "creatorEmail": "s.aishwaryaa.22@gmail.com",
+      "content": "LEXENC_REFUQSBQUk9DRVNTSU5HIEFHUkVFTUVOVCAoRFBBKQoKVGhpcyBEYXRhIFByb2Nlc3NpbmcgQWdyZWVtZW50ICgiRFBBIikgZ292ZXJucyB0aGUgcHJvY2Vzc2luZyBvZiBwZXJzb25hbCBkYXRhIGluIGNvbm5lY3Rpb24gd2l0aCB0aGUgTWFzdGVyIFNlcnZpY2VzIEFncmVlbWVudCBiZXR3ZWVuIExleExlZ2lzIENvcnAgYW5kIGN1c3RvbWVyLgoKMS4gREVGSU5JVElPTlMKIkdEUFIiIG1lYW5zIHRoZSBHZW5lcmFsIERhdGEgUHJvdGVjdGlvbiBSZWd1bGF0aW9uIChSZWd1bGF0aW9uIChFVSkgMjAxNi82NzkpLgoiUGVyc29uYWwgRGF0YSIsICJDb250cm9sbGVyIiwgIlByb2Nlc3NvciIsIGFuZCAiUHJvY2Vzc2luZyIgaGF2ZSB0aGUgbWVhbmluZ3MgZ2l2ZW4gaW4gdGhlIEdEUFIuCgoyLiBQUk9DRVNTSU5HIE9GIFBFUlNPTkFMIERBVEEKUHJvY2Vzc29yIHNoYWxsIG9ubHkgcHJvY2VzcyBQZXJzb25hbCBEYXRhIG9uIGluc3RydWN0aW9ucyBmcm9tIENvbnRyb2xsZXIuIElmIFByb2Nlc3NvciBpcyByZXF1aXJlZCBieSBsYXcgdG8gcHJvY2VzcyBQZXJzb25hbCBEYXRhIG90aGVyd2lzZSwgaXQgc2hhbGwgcHJvbXB0IENvbnRyb2xsZXIgdW5sZXNzIHByb2hpYml0ZWQgYnkgbGF3LgoKKk5PTi1DT01QTElBTkNFIEVYQ0VQVElPTioKVGhlIFByb2Nlc3NvciByZXNlcnZlcyB0aGUgcmlnaHQgdG8gc2hhcmUgZ2VuZXJpYyB1c2VyIGxvZ3MgYW5kIHRlbGVtZXRyeSBtZXRhZGF0YSB3aXRoIGV4dGVybmFsIGFkdmVydGlzZXJzIHdpdGggaW1wbGllZCBjb25zZW50IChISUdIIFNFVkVSSVRZIFBSSVZBQ1kgR0FQKS4KClN1YnByb2Nlc3NvcnMgbWF5IGJlIGVuZ2FnZWQgd2l0aG91dCBwcmlvciBub3RpY2UgdG8gdGhlIENvbnRyb2xsZXIsIGFuZCB0aGUgUHJvY2Vzc29yIHNoYWxsIG1haW50YWluIGFuIHVwZGF0ZWQgbGlzdCBvbiBpdHMgcHVibGljIHdlYnNpdGUgKE1FRElVTSBSSVNLIFNVQlBST0NFU1NPUiBHQVApLgoKMy4gU0VDVVJJVFkgTUVBU1VSRVMKUHJvY2Vzc29yIHNoYWxsIGltcGxlbWVudCBhcHByb3ByaWF0ZSB0ZWNobmljYWwgYW5kIG9yZ2FuaXphdGlvbmFsIG1lYXN1cmVzIHRvIHByb3RlY3QgUGVyc29uYWwgRGF0YSBhZ2FpbnN0IHVuYXV0aG9yaXplZCBhY2Nlc3MsIGRlc3RydWN0aW9uLCBvciBkaXNjbG9zdXJlLiBQcm9jZXNzb3IgZ3VhcmFudGVlcyBhbiBTTEEgdXB0aW1lIG9mIDk5LjAlIGZvciBjbG91ZCBzeW5jIG5vZGVzLgoKNC4gQVVESVRTIEFORCBMSUFCSUxJVFkKQW55IGRhdGEgcHJpdmFjeSBhdWRpdCByZXF1ZXN0ZWQgYnkgQ29udHJvbGxlciBzaGFsbCBiZSBwZXJmb3JtZWQgYXQgQ29udHJvbGxlcidzIHNvbGUgZXhwZW5zZSwgYW5kIENvbnRyb2xsZXIgbWF5IG9ubHkgcmVxdWVzdCBhdWRpdHMgb25jZSBldmVyeSBmaXZlICg1KSB5ZWFycyAoSElHSCBSSVNLIEFVRElUIEJBUlJJRVIpLg==",
+      "isEncrypted": true,
+      "createdAt": "2026-05-29T15:56:58.625Z",
+      "updatedAt": "2026-05-29T15:57:12.495Z",
+      "versions": [
+        {
+          "version": 1,
+          "content": "LEXENC_REFUQSBQUk9DRVNTSU5HIEFHUkVFTUVOVCAoRFBBKQoKVGhpcyBEYXRhIFByb2Nlc3NpbmcgQWdyZWVtZW50ICgiRFBBIikgZ292ZXJucyB0aGUgcHJvY2Vzc2luZyBvZiBwZXJzb25hbCBkYXRhIGluIGNvbm5lY3Rpb24gd2l0aCB0aGUgTWFzdGVyIFNlcnZpY2VzIEFncmVlbWVudCBiZXR3ZWVuIExleExlZ2lzIENvcnAgYW5kIGN1c3RvbWVyLgoKMS4gREVGSU5JVElPTlMKIkdEUFIiIG1lYW5zIHRoZSBHZW5lcmFsIERhdGEgUHJvdGVjdGlvbiBSZWd1bGF0aW9uIChSZWd1bGF0aW9uIChFVSkgMjAxNi82NzkpLgoiUGVyc29uYWwgRGF0YSIsICJDb250cm9sbGVyIiwgIlByb2Nlc3NvciIsIGFuZCAiUHJvY2Vzc2luZyIgaGF2ZSB0aGUgbWVhbmluZ3MgZ2l2ZW4gaW4gdGhlIEdEUFIuCgoyLiBQUk9DRVNTSU5HIE9GIFBFUlNPTkFMIERBVEEKUHJvY2Vzc29yIHNoYWxsIG9ubHkgcHJvY2VzcyBQZXJzb25hbCBEYXRhIG9uIGluc3RydWN0aW9ucyBmcm9tIENvbnRyb2xsZXIuIElmIFByb2Nlc3NvciBpcyByZXF1aXJlZCBieSBsYXcgdG8gcHJvY2VzcyBQZXJzb25hbCBEYXRhIG90aGVyd2lzZSwgaXQgc2hhbGwgcHJvbXB0IENvbnRyb2xsZXIgdW5sZXNzIHByb2hpYml0ZWQgYnkgbGF3LgoKKk5PTi1DT01QTElBTkNFIEVYQ0VQVElPTioKVGhlIFByb2Nlc3NvciByZXNlcnZlcyB0aGUgcmlnaHQgdG8gc2hhcmUgZ2VuZXJpYyB1c2VyIGxvZ3MgYW5kIHRlbGVtZXRyeSBtZXRhZGF0YSB3aXRoIGV4dGVybmFsIGFkdmVydGlzZXJzIHdpdGggaW1wbGllZCBjb25zZW50IChISUdIIFNFVkVSSVRZIFBSSVZBQ1kgR0FQKS4KClN1YnByb2Nlc3NvcnMgbWF5IGJlIGVuZ2FnZWQgd2l0aG91dCBwcmlvciBub3RpY2UgdG8gdGhlIENvbnRyb2xsZXIsIGFuZCB0aGUgUHJvY2Vzc29yIHNoYWxsIG1haW50YWluIGFuIHVwZGF0ZWQgbGlzdCBvbiBpdHMgcHVibGljIHdlYnNpdGUgKE1FRElVTSBSSVNLIFNVQlBST0NFU1NPUiBHQVApLgoKMy4gU0VDVVJJVFkgTUVBU1VSRVMKUHJvY2Vzc29yIHNoYWxsIGltcGxlbWVudCBhcHByb3ByaWF0ZSB0ZWNobmljYWwgYW5kIG9yZ2FuaXphdGlvbmFsIG1lYXN1cmVzIHRvIHByb3RlY3QgUGVyc29uYWwgRGF0YSBhZ2FpbnN0IHVuYXV0aG9yaXplZCBhY2Nlc3MsIGRlc3RydWN0aW9uLCBvciBkaXNjbG9zdXJlLiBQcm9jZXNzb3IgZ3VhcmFudGVlcyBhbiBTTEEgdXB0aW1lIG9mIDk5LjAlIGZvciBjbG91ZCBzeW5jIG5vZGVzLgoKNC4gQVVESVRTIEFORCBMSUFCSUxJVFkKQW55IGRhdGEgcHJpdmFjeSBhdWRpdCByZXF1ZXN0ZWQgYnkgQ29udHJvbGxlciBzaGFsbCBiZSBwZXJmb3JtZWQgYXQgQ29udHJvbGxlcidzIHNvbGUgZXhwZW5zZSwgYW5kIENvbnRyb2xsZXIgbWF5IG9ubHkgcmVxdWVzdCBhdWRpdHMgb25jZSBldmVyeSBmaXZlICg1KSB5ZWFycyAoSElHSCBSSVNLIEFVRElUIEJBUlJJRVIpLg==",
+          "createdAt": "2026-05-29T15:56:58.421Z",
+          "author": "aish",
+          "comment": "Created DPA from workspace template"
+        },
+        {
+          "version": 2,
+          "content": "LEXENC_REFUQSBQUk9DRVNTSU5HIEFHUkVFTUVOVCAoRFBBKQoKVGhpcyBEYXRhIFByb2Nlc3NpbmcgQWdyZWVtZW50ICgiRFBBIikgZ292ZXJucyB0aGUgcHJvY2Vzc2luZyBvZiBwZXJzb25hbCBkYXRhIGluIGNvbm5lY3Rpb24gd2l0aCB0aGUgTWFzdGVyIFNlcnZpY2VzIEFncmVlbWVudCBiZXR3ZWVuIExleExlZ2lzIENvcnAgYW5kIGN1c3RvbWVyLgoKMS4gREVGSU5JVElPTlMKIkdEUFIiIG1lYW5zIHRoZSBHZW5lcmFsIERhdGEgUHJvdGVjdGlvbiBSZWd1bGF0aW9uIChSZWd1bGF0aW9uIChFVSkgMjAxNi82NzkpLgoiUGVyc29uYWwgRGF0YSIsICJDb250cm9sbGVyIiwgIlByb2Nlc3NvciIsIGFuZCAiUHJvY2Vzc2luZyIgaGF2ZSB0aGUgbWVhbmluZ3MgZ2l2ZW4gaW4gdGhlIEdEUFIuCgoyLiBQUk9DRVNTSU5HIE9GIFBFUlNPTkFMIERBVEEKUHJvY2Vzc29yIHNoYWxsIG9ubHkgcHJvY2VzcyBQZXJzb25hbCBEYXRhIG9uIGluc3RydWN0aW9ucyBmcm9tIENvbnRyb2xsZXIuIElmIFByb2Nlc3NvciBpcyByZXF1aXJlZCBieSBsYXcgdG8gcHJvY2VzcyBQZXJzb25hbCBEYXRhIG90aGVyd2lzZSwgaXQgc2hhbGwgcHJvbXB0IENvbnRyb2xsZXIgdW5sZXNzIHByb2hpYml0ZWQgYnkgbGF3LgoKKk5PTi1DT01QTElBTkNFIEVYQ0VQVElPTioKVGhlIFByb2Nlc3NvciByZXNlcnZlcyB0aGUgcmlnaHQgdG8gc2hhcmUgZ2VuZXJpYyB1c2VyIGxvZ3MgYW5kIHRlbGVtZXRyeSBtZXRhZGF0YSB3aXRoIGV4dGVybmFsIGFkdmVydGlzZXJzIHdpdGggaW1wbGllZCBjb25zZW50IChISUdIIFNFVkVSSVRZIFBSSVZBQ1kgR0FQKS4KClN1YnByb2Nlc3NvcnMgbWF5IGJlIGVuZ2FnZWQgd2l0aG91dCBwcmlvciBub3RpY2UgdG8gdGhlIENvbnRyb2xsZXIsIGFuZCB0aGUgUHJvY2Vzc29yIHNoYWxsIG1haW50YWluIGFuIHVwZGF0ZWQgbGlzdCBvbiBpdHMgcHVibGljIHdlYnNpdGUgKE1FRElVTSBSSVNLIFNVQlBST0NFU1NPUiBHQVApLgoKMy4gU0VDVVJJVFkgTUVBU1VSRVMKUHJvY2Vzc29yIHNoYWxsIGltcGxlbWVudCBhcHByb3ByaWF0ZSB0ZWNobmljYWwgYW5kIG9yZ2FuaXphdGlvbmFsIG1lYXN1cmVzIHRvIHByb3RlY3QgUGVyc29uYWwgRGF0YSBhZ2FpbnN0IHVuYXV0aG9yaXplZCBhY2Nlc3MsIGRlc3RydWN0aW9uLCBvciBkaXNjbG9zdXJlLiBQcm9jZXNzb3IgZ3VhcmFudGVlcyBhbiBTTEEgdXB0aW1lIG9mIDk5LjAlIGZvciBjbG91ZCBzeW5jIG5vZGVzLgoKNC4gQVVESVRTIEFORCBMSUFCSUxJVFkKQW55IGRhdGEgcHJpdmFjeSBhdWRpdCByZXF1ZXN0ZWQgYnkgQ29udHJvbGxlciBzaGFsbCBiZSBwZXJmb3JtZWQgYXQgQ29udHJvbGxlcidzIHNvbGUgZXhwZW5zZSwgYW5kIENvbnRyb2xsZXIgbWF5IG9ubHkgcmVxdWVzdCBhdWRpdHMgb25jZSBldmVyeSBmaXZlICg1KSB5ZWFycyAoSElHSCBSSVNLIEFVRElUIEJBUlJJRVIpLg==",
+          "createdAt": "2026-05-29T15:57:08.840Z",
+          "author": "aish",
+          "comment": "Manual Editor Draft Commit"
+        },
+        {
+          "version": 3,
+          "content": "LEXENC_REFUQSBQUk9DRVNTSU5HIEFHUkVFTUVOVCAoRFBBKQoKVGhpcyBEYXRhIFByb2Nlc3NpbmcgQWdyZWVtZW50ICgiRFBBIikgZ292ZXJucyB0aGUgcHJvY2Vzc2luZyBvZiBwZXJzb25hbCBkYXRhIGluIGNvbm5lY3Rpb24gd2l0aCB0aGUgTWFzdGVyIFNlcnZpY2VzIEFncmVlbWVudCBiZXR3ZWVuIExleExlZ2lzIENvcnAgYW5kIGN1c3RvbWVyLgoKMS4gREVGSU5JVElPTlMKIkdEUFIiIG1lYW5zIHRoZSBHZW5lcmFsIERhdGEgUHJvdGVjdGlvbiBSZWd1bGF0aW9uIChSZWd1bGF0aW9uIChFVSkgMjAxNi82NzkpLgoiUGVyc29uYWwgRGF0YSIsICJDb250cm9sbGVyIiwgIlByb2Nlc3NvciIsIGFuZCAiUHJvY2Vzc2luZyIgaGF2ZSB0aGUgbWVhbmluZ3MgZ2l2ZW4gaW4gdGhlIEdEUFIuCgoyLiBQUk9DRVNTSU5HIE9GIFBFUlNPTkFMIERBVEEKUHJvY2Vzc29yIHNoYWxsIG9ubHkgcHJvY2VzcyBQZXJzb25hbCBEYXRhIG9uIGluc3RydWN0aW9ucyBmcm9tIENvbnRyb2xsZXIuIElmIFByb2Nlc3NvciBpcyByZXF1aXJlZCBieSBsYXcgdG8gcHJvY2VzcyBQZXJzb25hbCBEYXRhIG90aGVyd2lzZSwgaXQgc2hhbGwgcHJvbXB0IENvbnRyb2xsZXIgdW5sZXNzIHByb2hpYml0ZWQgYnkgbGF3LgoKKk5PTi1DT01QTElBTkNFIEVYQ0VQVElPTioKVGhlIFByb2Nlc3NvciByZXNlcnZlcyB0aGUgcmlnaHQgdG8gc2hhcmUgZ2VuZXJpYyB1c2VyIGxvZ3MgYW5kIHRlbGVtZXRyeSBtZXRhZGF0YSB3aXRoIGV4dGVybmFsIGFkdmVydGlzZXJzIHdpdGggaW1wbGllZCBjb25zZW50IChISUdIIFNFVkVSSVRZIFBSSVZBQ1kgR0FQKS4KClN1YnByb2Nlc3NvcnMgbWF5IGJlIGVuZ2FnZWQgd2l0aG91dCBwcmlvciBub3RpY2UgdG8gdGhlIENvbnRyb2xsZXIsIGFuZCB0aGUgUHJvY2Vzc29yIHNoYWxsIG1haW50YWluIGFuIHVwZGF0ZWQgbGlzdCBvbiBpdHMgcHVibGljIHdlYnNpdGUgKE1FRElVTSBSSVNLIFNVQlBST0NFU1NPUiBHQVApLgoKMy4gU0VDVVJJVFkgTUVBU1VSRVMKUHJvY2Vzc29yIHNoYWxsIGltcGxlbWVudCBhcHByb3ByaWF0ZSB0ZWNobmljYWwgYW5kIG9yZ2FuaXphdGlvbmFsIG1lYXN1cmVzIHRvIHByb3RlY3QgUGVyc29uYWwgRGF0YSBhZ2FpbnN0IHVuYXV0aG9yaXplZCBhY2Nlc3MsIGRlc3RydWN0aW9uLCBvciBkaXNjbG9zdXJlLiBQcm9jZXNzb3IgZ3VhcmFudGVlcyBhbiBTTEEgdXB0aW1lIG9mIDk5LjAlIGZvciBjbG91ZCBzeW5jIG5vZGVzLgoKNC4gQVVESVRTIEFORCBMSUFCSUxJVFkKQW55IGRhdGEgcHJpdmFjeSBhdWRpdCByZXF1ZXN0ZWQgYnkgQ29udHJvbGxlciBzaGFsbCBiZSBwZXJmb3JtZWQgYXQgQ29udHJvbGxlcidzIHNvbGUgZXhwZW5zZSwgYW5kIENvbnRyb2xsZXIgbWF5IG9ubHkgcmVxdWVzdCBhdWRpdHMgb25jZSBldmVyeSBmaXZlICg1KSB5ZWFycyAoSElHSCBSSVNLIEFVRElUIEJBUlJJRVIpLg==",
+          "createdAt": "2026-05-29T15:57:12.495Z",
+          "author": "aish",
+          "comment": "Manual Editor Draft Commit"
+        }
+      ],
+      "signatures": [],
+      "redlines": [],
+      "sharedWith": [],
+      "auditLogs": [
+        {
+          "timestamp": "2026-05-29T15:56:58.421Z",
+          "action": "Created",
+          "user": "aish",
+          "details": "Agreement initialized with DPA template."
+        },
+        {
+          "timestamp": "2026-05-29T15:56:58.421Z",
+          "action": "Encrypted",
+          "user": "System Encryption Core",
+          "details": "Encrypted at-rest on secure cloud storage partition."
+        },
+        {
+          "timestamp": "2026-05-29T15:57:08.840Z",
+          "action": "Updated Content",
+          "user": "aish",
+          "details": "Manual Editor Draft Commit"
+        },
+        {
+          "timestamp": "2026-05-29T15:57:12.495Z",
+          "action": "Updated Content",
+          "user": "aish",
+          "details": "Manual Editor Draft Commit"
+        }
+      ],
+      "analysis": null
+    }
+  ]
+}

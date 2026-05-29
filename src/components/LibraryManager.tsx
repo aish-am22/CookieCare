@@ -186,12 +186,12 @@ export default function LibraryManager({ documents, authToken, onRefresh }: Libr
         {
           id: "fld_6",
           type: "files",
-          name: "Lexlegis Sample Files",
+          name: "CookieCare Sample Files",
           description: "Sample Files for Interactions",
           tags: "-",
           itemsCount: 3,
           dateModified: "22-01-26",
-          createdBy: "Lexlegis",
+          createdBy: "CookieCare",
           fileList: [
             { name: "mutual_nda_boilerplate.pdf", size: "1.2 MB", type: "PDF" },
             { name: "dpa_subprocessor_schedule_v2.docx", size: "850 KB", type: "DOCX" },
@@ -252,7 +252,7 @@ export default function LibraryManager({ documents, authToken, onRefresh }: Libr
           tags: "Review",
           itemsCount: "Active",
           dateModified: "22-05-26",
-          createdBy: "Lexlegis",
+          createdBy: "CookieCare",
           details: "Convert any informal client suggestions into formal legal provisions with Delaware governing context."
         },
         {
@@ -263,7 +263,7 @@ export default function LibraryManager({ documents, authToken, onRefresh }: Libr
           tags: "Redlines",
           itemsCount: "Inactive",
           dateModified: "23-05-26",
-          createdBy: "Lexlegis",
+          createdBy: "CookieCare",
           details: "Scan for any unlimited liability clauses or non-symmetrical indemnities and draft aggressive mutual defense clauses."
         },
         {
@@ -298,7 +298,7 @@ export default function LibraryManager({ documents, authToken, onRefresh }: Libr
           tags: "Data Privacy",
           itemsCount: "3 Questions",
           dateModified: "18-05-26",
-          createdBy: "Lexlegis",
+          createdBy: "CookieCare",
           details: "1. Does controller have direct opt-out upon subprocessor name changes?\n2. How is breach notice delay structured?\n3. Is direct audit access granted to subprocessor premises?"
         },
 
@@ -322,7 +322,7 @@ export default function LibraryManager({ documents, authToken, onRefresh }: Libr
           tags: "Privacy",
           itemsCount: "5 rules",
           dateModified: "12-05-26",
-          createdBy: "Lexlegis",
+          createdBy: "CookieCare",
           details: "- No direct US processing without controller opt-in.\n- Mandatory GDPR Article 28 compliance checklist.\n- 72-hour breach notice guarantee."
         },
 
@@ -335,7 +335,7 @@ export default function LibraryManager({ documents, authToken, onRefresh }: Libr
           tags: "NDA",
           itemsCount: "1 doc",
           dateModified: "26-03-26",
-          createdBy: "Lexlegis",
+          createdBy: "CookieCare",
           details: "This Mutual Non-Disclosure Agreement is executed between Discloser and Recipient for exploring engineering integrations..."
         },
         {
@@ -346,7 +346,7 @@ export default function LibraryManager({ documents, authToken, onRefresh }: Libr
           tags: "DPA",
           itemsCount: "1 doc",
           dateModified: "21-01-26",
-          createdBy: "Lexlegis",
+          createdBy: "CookieCare",
           details: "This Data Processing Addendum is entered into by Controller and Processor to govern processing of client personal data..."
         },
 
@@ -359,7 +359,7 @@ export default function LibraryManager({ documents, authToken, onRefresh }: Libr
           tags: "Liability",
           itemsCount: "Boilerplate",
           dateModified: "05-05-26",
-          createdBy: "Lexlegis",
+          createdBy: "CookieCare",
           details: "EXCEPT FOR CLAIMS ARISING FROM GROSS NEGLIGENCE, WILLFUL MISCONDUCT, OR INDEMNIFIABLE BREACHES, EACH PARTY's TOTAL AGGREGATE LIABILITY SHALL BE CAP-RESTRICTED TO TWO TIMES (2X) THE AGGREGATE FEES PAID OVER THE PRECEDING TWELVE MONTHS."
         },
         {
@@ -370,7 +370,7 @@ export default function LibraryManager({ documents, authToken, onRefresh }: Libr
           tags: "Indemnity",
           itemsCount: "Boilerplate",
           dateModified: "06-05-26",
-          createdBy: "Lexlegis",
+          createdBy: "CookieCare",
           details: "Each party shall defend, indemnify, and hold harmless the other party against any direct third-party claim alleging that the software or intellectual assets delivered violate any patent or copyright."
         },
 
@@ -383,7 +383,7 @@ export default function LibraryManager({ documents, authToken, onRefresh }: Libr
           tags: "Regulatory",
           itemsCount: "Active RAG",
           dateModified: "22-04-26",
-          createdBy: "Lexlegis",
+          createdBy: "CookieCare",
           details: "https://mca.gov.in"
         },
         {
@@ -394,7 +394,7 @@ export default function LibraryManager({ documents, authToken, onRefresh }: Libr
           tags: "Tax",
           itemsCount: "Active RAG",
           dateModified: "25-04-26",
-          createdBy: "Lexlegis",
+          createdBy: "CookieCare",
           details: "https://incometaxindia.gov.in"
         },
 
@@ -407,7 +407,7 @@ export default function LibraryManager({ documents, authToken, onRefresh }: Libr
           tags: "Category",
           itemsCount: "6 items",
           dateModified: "10-04-26",
-          createdBy: "Lexlegis"
+          createdBy: "CookieCare"
         },
         {
           id: "tg_2",
@@ -417,7 +417,7 @@ export default function LibraryManager({ documents, authToken, onRefresh }: Libr
           tags: "Compliance",
           itemsCount: "4 items",
           dateModified: "12-04-26",
-          createdBy: "Lexlegis"
+          createdBy: "CookieCare"
         }
       ];
 

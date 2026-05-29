@@ -58,7 +58,7 @@ import { LegalDocument, Version } from "../types";
 // ==============================================================================
 const templateFolders = [
   {
-    name: "Lexlegis Templates",
+    name: "CookieCare Templates",
     count: 10,
     items: [
       "Mutual Non-Disclosure Agreement",
@@ -92,7 +92,7 @@ const templateFolders = [
 
 const clauseCategories = [
   {
-    name: "Lexlegis Clause Library",
+    name: "CookieCare Clause Library",
     count: 6,
     items: [
       "Non-Solicitation of Staff Covenants",
@@ -279,7 +279,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
   const [customClauseText, setCustomClauseText] = useState("");
   
   // Basic Mode Form Inputs
-  const [basicPartyA, setBasicPartyA] = useState("LexLegis Corporate Client");
+  const [basicPartyA, setBasicPartyA] = useState("CookieCare Corporate Client");
   const [basicPartyB, setBasicPartyB] = useState("Vendor Infrastructure Host");
   const [basicLaw, setBasicLaw] = useState("State of Delaware");
   const [basicLiability, setBasicLiability] = useState("USD $2,000,000 limit");
@@ -296,8 +296,8 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
   const [s4Open, setS4Open] = useState(false);
 
   // Expand states for folders inside Section 1 & Section 3
-  const [expandedFolder, setExpandedFolder] = useState<string | null>("Lexlegis Templates");
-  const [expandedClauseCat, setExpandedClauseCat] = useState<string | null>("Lexlegis Clause Library");
+  const [expandedFolder, setExpandedFolder] = useState<string | null>("CookieCare Templates");
+  const [expandedClauseCat, setExpandedClauseCat] = useState<string | null>("CookieCare Clause Library");
 
   // Search filter query
   const [searchTemplateQuery, setSearchTemplateQuery] = useState("");
@@ -315,12 +315,12 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
   const [uploadFileName, setUploadFileName] = useState("");
   const [isParsingTemplate, setIsParsingTemplate] = useState(false);
   const [advancedFields, setAdvancedFields] = useState<Array<{ id: string; name: string; defaultValue: string; description: string }>>([
-    { id: "party_a", name: "Party A Title", defaultValue: "LexLegis Corporate", description: "Disclosing Primary Entity" },
+    { id: "party_a", name: "Party A Title", defaultValue: "CookieCare Corporate", description: "Disclosing Primary Entity" },
     { id: "party_b", name: "Party B Title", defaultValue: "Vendor Tech Inc.", description: "Receiving technology Vendor" },
     { id: "jurisdiction", name: "Jurisdiction", defaultValue: "Delaware chancery", description: "Standard Governing Law" },
   ]);
   const [advancedFieldValues, setAdvancedFieldValues] = useState<Record<string, string>>({
-    party_a: "LexLegis Corporate",
+    party_a: "CookieCare Corporate",
     party_b: "Vendor Tech Inc.",
     jurisdiction: "Delaware chancery"
   });
@@ -337,12 +337,18 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
   const [askAiQuery, setAskAiQuery] = useState("");
   const [showAskAiInput, setShowAskAiInput] = useState(false);
   const [isAiRefiningText, setIsAiRefiningText] = useState(false);
+  const undoStackRef = useRef<string[]>([]);
+  const redoStackRef = useRef<string[]>([]);
+  const editorSelectionRef = useRef<{ start: number; end: number } | null>(null);
 
   // Sync editor if document selection alters
   useEffect(() => {
     if (selectedDoc) {
       setEditorContent(selectedDoc.content);
       setIsGeneratorActive(false);
+      undoStackRef.current = [];
+      redoStackRef.current = [];
+      editorSelectionRef.current = null;
     }
   }, [selectedDoc]);
 
@@ -356,6 +362,9 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
     setSelectedDoc(null);
     setIsGeneratorActive(true);
     onSelectDocument(null);
+    undoStackRef.current = [];
+    redoStackRef.current = [];
+    editorSelectionRef.current = null;
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -485,24 +494,96 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
     }
   };
 
+  const pushUndoSnapshot = (snapshot: string) => {
+    if (undoStackRef.current[0] !== snapshot) {
+      undoStackRef.current = [snapshot, ...undoStackRef.current].slice(0, 50);
+    }
+    redoStackRef.current = [];
+  };
+
+  const syncEditorSelection = (textarea: HTMLTextAreaElement) => {
+    const selection = {
+      start: textarea.selectionStart ?? 0,
+      end: textarea.selectionEnd ?? textarea.selectionStart ?? 0
+    };
+
+    editorSelectionRef.current = selection;
+    if (selection.start !== selection.end) {
+      setSelectedTextRange(selection);
+      setShowFloatingMenu(true);
+    }
+
+    return selection;
+  };
+
   // Insert standard markup helpers
   const insertTextAtCursor = (before: string, after: string = "") => {
     const textarea = editorRef.current;
     if (!textarea) return;
 
-    const startPos = textarea.selectionStart;
-    const endPos = textarea.selectionEnd;
+    const selection = editorSelectionRef.current ?? syncEditorSelection(textarea);
+    const startPos = selection.start;
+    const endPos = selection.end;
     const text = textarea.value;
     const selected = text.substring(startPos, endPos);
 
-    const replacement = before + (selected || " ") + after;
+    const replacement = before + (selected || "") + after;
     const newContent = text.substring(0, startPos) + replacement + text.substring(endPos);
     
+    pushUndoSnapshot(editorContent);
     setEditorContent(newContent);
     textarea.focus();
     setTimeout(() => {
-      textarea.selectionStart = startPos + before.length;
-      textarea.selectionEnd = startPos + before.length + (selected || " ").length;
+      const nextStart = startPos + before.length;
+      const nextEnd = nextStart + selected.length;
+      textarea.setSelectionRange(nextStart, nextEnd);
+      editorSelectionRef.current = { start: nextStart, end: nextEnd };
+    }, 10);
+  };
+
+  const handleUndo = () => {
+    const previous = undoStackRef.current[0];
+    if (previous === undefined) return;
+
+    redoStackRef.current = [editorContent, ...redoStackRef.current].slice(0, 50);
+    undoStackRef.current = undoStackRef.current.slice(1);
+    setEditorContent(previous);
+    editorSelectionRef.current = { start: previous.length, end: previous.length };
+  };
+
+  const handleRedo = () => {
+    const next = redoStackRef.current[0];
+    if (next === undefined) return;
+
+    undoStackRef.current = [editorContent, ...undoStackRef.current].slice(0, 50);
+    redoStackRef.current = redoStackRef.current.slice(1);
+    setEditorContent(next);
+    editorSelectionRef.current = { start: next.length, end: next.length };
+  };
+
+  const transformSelectedLines = (transformLine: (line: string) => string) => {
+    const textarea = editorRef.current;
+    if (!textarea) return;
+
+    const selection = editorSelectionRef.current ?? syncEditorSelection(textarea);
+    const startPos = selection.start;
+    const endPos = selection.end;
+    const text = textarea.value;
+    const selected = text.substring(startPos, endPos);
+    if (!selected) return;
+
+    const replacement = selected
+      .split("\n")
+      .map(transformLine)
+      .join("\n");
+
+    pushUndoSnapshot(editorContent);
+    const nextContent = text.substring(0, startPos) + replacement + text.substring(endPos);
+    setEditorContent(nextContent);
+    setTimeout(() => {
+      textarea.focus();
+      textarea.setSelectionRange(startPos, startPos + replacement.length);
+      editorSelectionRef.current = { start: startPos, end: startPos + replacement.length };
     }, 10);
   };
 
@@ -517,7 +598,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
       );
     } else if (action === "signature-block") {
       insertTextAtCursor(
-        `\n\n[EXECUTED SIGNATURE SPECIFICATION]\nApproved legal representative: LexLegis Workspace\nCrypto Seal Identifier: STAMP_${Math.random().toString(36).substr(2, 6).toUpperCase()}_SECURE\nDate: ${new Date().toLocaleDateString()}\n`
+        `\n\n[EXECUTED SIGNATURE SPECIFICATION]\nApproved legal representative: CookieCare Workspace\nCrypto Seal Identifier: STAMP_${Math.random().toString(36).substr(2, 6).toUpperCase()}_SECURE\nDate: ${new Date().toLocaleDateString()}\n`
       );
     }
   };
@@ -594,12 +675,11 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
     const textarea = e.currentTarget;
     const start = textarea.selectionStart;
     const end = textarea.selectionEnd;
+    syncEditorSelection(textarea);
     
     if (start !== end) {
       const text = textarea.value.substring(start, end).trim();
       if (text.length > 0) {
-        setSelectedTextRange({ start, end });
-        
         // Compute floating coordinates inside viewport
         const rect = textarea.getBoundingClientRect();
         // Set coordinates to float nicely above selection
@@ -610,7 +690,8 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
         setShowFloatingMenu(true);
       }
     } else {
-      // Don't close if clicking options inside menu
+      setSelectedTextRange(null);
+      setShowFloatingMenu(false);
     }
   };
 
@@ -622,6 +703,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
     setIsAiRefiningText(true);
     setActiveDropdown(null);
     setShowAskAiInput(false);
+    pushUndoSnapshot(editorContent);
 
     // Dynamic AI prompt simulation matching Screenshot 3 rewritten results!
     setTimeout(() => {
@@ -658,6 +740,10 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
       setShowFloatingMenu(false);
       setSelectedTextRange(null);
       setAskAiQuery("");
+      editorSelectionRef.current = {
+        start: selectedTextRange.start,
+        end: selectedTextRange.start + rewritten.length
+      };
     }, 1100);
   };
 
@@ -665,6 +751,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
   const handleExecuteDraftStream = async () => {
     setIsStreaming(true);
     setStreamingProgress("Initiating multi-agent ingestion pipeline...");
+    pushUndoSnapshot(editorContent);
     
     // Choose what document content to stream
     let documentTitle = "Mutual Compliance Agreement";
@@ -688,13 +775,13 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
             .replace(/\[● JURISDICTION Insert the appropriate court jurisdiction, e.g., District Court\/High Court and location\]/g, "High Court of Delhi, New Delhi")
             .replace(/\[● PETITION NUMBER Insert the petition number assigned by the court registry\]/g, "742/2026")
             .replace(/\[● YEAR Insert current year\]/g, "2026")
-            .replace(/\[● PETITIONER NAME Insert full legal name of the Petitioner\]/g, "LexLegis Tech Solutions")
+            .replace(/\[● PETITIONER NAME Insert full legal name of the Petitioner\]/g, "CookieCare Tech Solutions")
             .replace(/\[● RESPONDENT NAME Insert full legal name of the Respondent\]/g, "Arbitration Respondent Private Limited")
             .replace(/\[● PETITIONER ADDRESS Insert registered office address\]/g, "Barakhamba Road, Connaught Place, New Delhi");
         } else {
           documentTitle = selectedTemplateName || "Proactive Draft Covenants";
           documentBodyToStream = NDA_DOC_CONTENT
-            .replace(/\[● PARTY A NAME Insert full legal name of the first party\]/g, "LexLegis Client")
+            .replace(/\[● PARTY A NAME Insert full legal name of the first party\]/g, "CookieCare Client")
             .replace(/\[● PARTY B NAME Insert full legal name of the second party\]/g, "E-Commerce Vendor")
             .replace(/\[● JURISDICTION Insert jurisdiction of incorporation\]/g, "California Registry")
             .replace(/\[● REGISTERED ADDRESS Insert complete registered address\]/g, "Redwood City Offices");
@@ -1338,7 +1425,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
 
                     {s1Open && (
                       <div className="p-6 space-y-4">
-                        <p className="text-xs text-gray-400">Choose from Lexlegis Templates or your uploaded templates.</p>
+                        <p className="text-xs text-gray-400">Choose from CookieCare Templates or your uploaded templates.</p>
                         
                         <div className="flex space-x-2">
                           <div className="relative flex-1">
@@ -1713,9 +1800,9 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
 
             {/* RICH INTERACTIVE TOOLBAR (Matches Screenshots 2 & 7 exactly) */}
             <div className="p-2.5 border-b border-gray-200 bg-white flex items-center justify-center space-x-1.5 overflow-x-auto shrink-0 select-none shadow-xs">
-              <button onClick={() => alert("Undo")} className="p-1.5 hover:bg-slate-50 text-gray-600 rounded-md transition" title="Undo"><Undo className="w-4 h-4" /></button>
-              <button onClick={() => alert("Redo")} className="p-1.5 hover:bg-slate-50 text-gray-600 rounded-md transition" title="Redo"><Redo className="w-4 h-4" /></button>
-              <button onClick={() => setEditorContent("")} className="p-1.5 hover:bg-rose-50 text-rose-600 rounded-md transition" title="Clear Slate"><Eraser className="w-4 h-4" /></button>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={handleUndo} className="p-1.5 hover:bg-slate-50 text-gray-600 rounded-md transition" title="Undo"><Undo className="w-4 h-4" /></button>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={handleRedo} className="p-1.5 hover:bg-slate-50 text-gray-600 rounded-md transition" title="Redo"><Redo className="w-4 h-4" /></button>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => { pushUndoSnapshot(editorContent); setEditorContent(""); editorSelectionRef.current = { start: 0, end: 0 }; }} className="p-1.5 hover:bg-rose-50 text-rose-600 rounded-md transition" title="Clear Slate"><Eraser className="w-4 h-4" /></button>
               
               <span className="w-[1px] h-5 bg-gray-200 mx-1" />
               
@@ -1744,34 +1831,42 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
               <span className="w-[1px] h-5 bg-gray-200 mx-1" />
 
               {/* Bold, Italic, Underline */}
-              <button onClick={() => handleToolbarFormat("bold")} className="p-1.5 hover:bg-slate-50 text-gray-700 rounded-md transition font-bold" title="Bold"><Bold className="w-4 h-4" /></button>
-              <button onClick={() => insertTextAtCursor("_", "_")} className="p-1.5 hover:bg-slate-50 text-gray-700 rounded-md transition italic" title="Italic"><span className="font-serif font-bold text-sm">I</span></button>
-              <button onClick={() => insertTextAtCursor("<u>", "</u>")} className="p-1.5 hover:bg-slate-50 text-gray-700 rounded-md transition underline" title="Underline"><span className="underline font-bold text-xs">U</span></button>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => handleToolbarFormat("bold")} className="p-1.5 hover:bg-slate-50 text-gray-700 rounded-md transition font-bold" title="Bold"><Bold className="w-4 h-4" /></button>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertTextAtCursor("_", "_")} className="p-1.5 hover:bg-slate-50 text-gray-700 rounded-md transition italic" title="Italic"><span className="font-serif font-bold text-sm">I</span></button>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertTextAtCursor("<u>", "</u>")} className="p-1.5 hover:bg-slate-50 text-gray-700 rounded-md transition underline" title="Underline"><span className="underline font-bold text-xs">U</span></button>
               
-              <button className="p-1.5 hover:bg-slate-50 text-gray-700 rounded-md transition" title="Text Color"><Baseline className="w-4 h-4" /></button>
-              <button className="p-1.5 hover:bg-slate-50 text-gray-700 rounded-md transition" title="Background Color"><Highlighter className="w-4 h-4" /></button>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => {
+                const color = window.prompt("Enter a text color name or hex value", "#0F172A");
+                if (!color) return;
+                insertTextAtCursor(`[color:${color}]`, "[/color]");
+              }} className="p-1.5 hover:bg-slate-50 text-gray-700 rounded-md transition" title="Text Color"><Baseline className="w-4 h-4" /></button>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => {
+                const color = window.prompt("Enter a background color name or hex value", "#FEF3C7");
+                if (!color) return;
+                insertTextAtCursor(`[highlight:${color}]`, "[/highlight]");
+              }} className="p-1.5 hover:bg-slate-50 text-gray-700 rounded-md transition" title="Background Color"><Highlighter className="w-4 h-4" /></button>
               
               <span className="w-[1px] h-5 bg-gray-200 mx-1" />
 
               {/* Lists */}
-              <button onClick={() => handleToolbarFormat("list")} className="p-1.5 hover:bg-slate-50 text-gray-750 rounded-md transition" title="Unordered list"><List className="w-4 h-4" /></button>
-              <button onClick={() => insertTextAtCursor("\n1. ", "\n")} className="p-1.5 hover:bg-slate-50 text-gray-750 rounded-md transition" title="Ordered list"><ListOrdered className="w-4 h-4" /></button>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => handleToolbarFormat("list")} className="p-1.5 hover:bg-slate-50 text-gray-750 rounded-md transition" title="Unordered list"><List className="w-4 h-4" /></button>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertTextAtCursor("\n1. ", "\n")} className="p-1.5 hover:bg-slate-50 text-gray-750 rounded-md transition" title="Ordered list"><ListOrdered className="w-4 h-4" /></button>
               
-              <button className="p-1.5 hover:bg-slate-50 text-gray-500 rounded-md transition" title="Outdent"><Outdent className="w-4 h-4" /></button>
-              <button className="p-1.5 hover:bg-slate-50 text-gray-500 rounded-md transition" title="Indent"><Indent className="w-4 h-4" /></button>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => transformSelectedLines((line) => line.replace(/^\s{1,2}/, ""))} className="p-1.5 hover:bg-slate-50 text-gray-500 rounded-md transition" title="Outdent"><Outdent className="w-4 h-4" /></button>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => transformSelectedLines((line) => `  ${line}`)} className="p-1.5 hover:bg-slate-50 text-gray-500 rounded-md transition" title="Indent"><Indent className="w-4 h-4" /></button>
               
               <span className="w-[1px] h-5 bg-gray-200 mx-1" />
 
               {/* Alignments */}
-              <button className="p-1.5 hover:bg-slate-50 text-gray-700 rounded-md transition" title="Align Left"><AlignLeft className="w-4 h-4" /></button>
-              <button className="p-1.5 hover:bg-slate-50 text-gray-700 rounded-md transition" title="Align Center"><AlignCenter className="w-4 h-4" /></button>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertTextAtCursor("\n[ALIGN:LEFT]\n")} className="p-1.5 hover:bg-slate-50 text-gray-700 rounded-md transition" title="Align Left"><AlignLeft className="w-4 h-4" /></button>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertTextAtCursor("\n[ALIGN:CENTER]\n")} className="p-1.5 hover:bg-slate-50 text-gray-700 rounded-md transition" title="Align Center"><AlignCenter className="w-4 h-4" /></button>
               
               <span className="w-[1px] h-5 bg-gray-200 mx-1" />
 
-              <button className="p-1.5 hover:bg-slate-50 text-gray-700 rounded-md transition" title="Insert Table"><Table className="w-4 h-4" /></button>
-              <button onClick={() => insertTextAtCursor("\n---\n")} className="p-1.5 hover:bg-slate-50 text-gray-600 rounded-md transition" title="Horizon divider line"><Columns className="w-4 h-4" /></button>
-              <button onClick={() => handleToolbarFormat("disclaimer")} className="p-1 text-[11px] font-mono hover:bg-slate-50 border border-gray-200 rounded-md transition text-slate-600" title="Add Disclaimer font">+ Disclaimer</button>
-              <button onClick={() => handleToolbarFormat("signature-block")} className="p-1 text-[11px] font-mono hover:bg-slate-50 border border-gray-200 rounded-md transition text-slate-600" title="Apply Execution Stamp">+ Stamp</button>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertTextAtCursor("\n| Column 1 | Column 2 |\n| --- | --- |\n|  |  |\n")} className="p-1.5 hover:bg-slate-50 text-gray-700 rounded-md transition" title="Insert Table"><Table className="w-4 h-4" /></button>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertTextAtCursor("\n---\n")} className="p-1.5 hover:bg-slate-50 text-gray-600 rounded-md transition" title="Horizontal divider line"><Columns className="w-4 h-4" /></button>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => handleToolbarFormat("disclaimer")} className="p-1 text-[11px] font-mono hover:bg-slate-50 border border-gray-200 rounded-md transition text-slate-600" title="Add Disclaimer">+ Disclaimer</button>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => handleToolbarFormat("signature-block")} className="p-1 text-[11px] font-mono hover:bg-slate-50 border border-gray-200 rounded-md transition text-slate-600" title="Apply Execution Stamp">+ Stamp</button>
             </div>
 
             {/* SECONDARY ACTION BAR DIRECTLY UNDER TOOLBAR (Screenshot 2 / 7) */}
@@ -1908,8 +2003,13 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
                   <textarea
                     ref={editorRef}
                     onSelect={handleEditorSelect}
+                    onMouseUp={(e) => syncEditorSelection(e.currentTarget)}
+                    onKeyUp={(e) => syncEditorSelection(e.currentTarget)}
                     value={editorContent}
-                    onChange={(e) => setEditorContent(e.target.value)}
+                    onChange={(e) => {
+                      pushUndoSnapshot(editorContent);
+                      setEditorContent(e.target.value);
+                    }}
                     disabled={isFullySigned}
                     className="w-full flex-1 min-h-[640px] border-0 outline-none focus:ring-0 text-sm font-sans tracking-wide leading-relaxed text-gray-800 placeholder-gray-300 resize-none bg-transparent"
                     placeholder="Begin typing or select templates to trigger agentic intake..."
