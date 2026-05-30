@@ -170,15 +170,58 @@ ${g.remediation}
 Report secured and validated by Cookie Care FIPS Sandbox services.`;
   };
 
-  const downloadReportFile = (format: "pdf" | "docx") => {
-    const textData = makeReportContentString();
-    const blob = new Blob([textData], { type: "text/plain;charset=utf-8" });
-    const element = document.createElement("a");
-    element.href = URL.createObjectURL(blob);
-    element.download = `CookieCare_Compliance_${result?.scanSummary.url.replace(/https?:\/\/|www\./gi, "").replace(/[\.\s\/]/gi, "_")}.${format}`;
-    document.body.appendChild(element);
-    element.click();
-    document.body.removeChild(element);
+  const downloadReportFile = async (format: "pdf" | "docx") => {
+    if (!result) return;
+
+    try {
+      const res = await fetch("/api/documents/export", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${authToken}`
+        },
+        body: JSON.stringify({
+          title: `CookieCare_Compliance_${result.scanSummary.url.replace(/https?:\/\/|www\./gi, "").replace(/[\.\s\/]/gi, "_")}`,
+          format: format === "pdf" ? "html" : "docx",
+          contentType: "cookie_report",
+          payload: {
+            url: result.scanSummary.url,
+            score: `${result.scanSummary.overallScore}%`,
+            cookies: result.cookiesDetected,
+            gaps: result.complianceGaps
+          }
+        })
+      });
+
+      if (!res.ok) throw new Error("Failed to generate report via backend.");
+
+      if (format === "pdf") {
+        const html = await res.text();
+        const printWindow = window.open("", "_blank");
+        if (printWindow) {
+          printWindow.document.write(html);
+          printWindow.document.close();
+        }
+      } else {
+        const blob = await res.blob();
+        const element = document.createElement("a");
+        element.href = URL.createObjectURL(blob);
+        element.download = `CookieCare_Compliance_${result.scanSummary.url.replace(/https?:\/\/|www\./gi, "").replace(/[\.\s\/]/gi, "_")}.doc`;
+        document.body.appendChild(element);
+        element.click();
+        document.body.removeChild(element);
+      }
+    } catch (err: any) {
+      console.warn("Backend report generation failed, falling back to local text blob.", err.message);
+      const textData = makeReportContentString();
+      const blob = new Blob([textData], { type: "text/plain;charset=utf-8" });
+      const element = document.createElement("a");
+      element.href = URL.createObjectURL(blob);
+      element.download = `CookieCare_Compliance_${result?.scanSummary.url.replace(/https?:\/\/|www\./gi, "").replace(/[\.\s\/]/gi, "_")}.${format === "pdf" ? "txt" : "doc"}`;
+      document.body.appendChild(element);
+      element.click();
+      document.body.removeChild(element);
+    }
   };
 
   return (

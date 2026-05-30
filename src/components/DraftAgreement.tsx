@@ -612,8 +612,9 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
           "Authorization": `Bearer ${authToken}`
         },
         body: JSON.stringify({
+          title: selectedDoc?.title || "Legal_Agreement",
           text: editorContent,
-          contentType: "redlines",
+          contentType: "draft",
           format: "docx"
         })
       });
@@ -648,8 +649,9 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
           "Authorization": `Bearer ${authToken}`
         },
         body: JSON.stringify({
+          title: selectedDoc?.title || "Legal_Agreement",
           text: editorContent,
-          contentType: "redlines",
+          contentType: "draft",
           format: "html"
         })
       });

@@ -754,10 +754,10 @@ app.post("/api/documents/upload", authenticateToken, upload.single("file"), asyn
 
 // Enterprise Export Engine (PDF / DOCX Generation)
 app.post("/api/documents/export", (req: any, res) => {
-  const { title, format, contentType, content, payload } = req.body;
-  if (!title) {
-    return res.status(400).json({ error: "Missing required parameter: title" });
-  }
+  const { title, format, contentType, payload } = req.body;
+  const content = req.body.content || req.body.text || "";
+
+  const finalTitle = title || "CookieCare_Document";
 
   let bodyHtml = "";
 
@@ -767,7 +767,7 @@ app.post("/api/documents/export", (req: any, res) => {
       <div style="font-family: Arial, sans-serif;">
         <h1 style="color: #1a365d; border-bottom: 2px solid #1a365d; padding-bottom: 8px;">CookieCare Enterprise Legal Risk Report</h1>
         <div style="margin: 20px 0; padding: 15px; background: #f7fafc; border-left: 4px solid #3182ce;">
-          <p style="margin: 2px 0;">Document Scope: <strong>${title}</strong></p>
+          <p style="margin: 2px 0;">Document Scope: <strong>${finalTitle}</strong></p>
           <p style="margin: 2px 0;">Overall Compliance Score: <span style="background: #e2e8f0; padding: 4px 8px; border-radius: 4px; color: #2d3748; font-weight: bold;">${payload?.overallScore || "Evaluated"}</span></p>
           <p style="margin: 2px 0;"><em>Generated on: ${new Date().toLocaleString()}</em></p>
         </div>
@@ -790,7 +790,7 @@ app.post("/api/documents/export", (req: any, res) => {
     const proposals = payload?.provisions || payload?.redlines || [];
     bodyHtml = `
       <div style="font-family: Arial, sans-serif;">
-        <h1 style="color: #1a365d; border-bottom: 2px solid #1a365d; padding-bottom: 8px;">Side-by-Side Redlines of ${title}</h1>
+        <h1 style="color: #1a365d; border-bottom: 2px solid #1a365d; padding-bottom: 8px;">Side-by-Side Redlines of ${finalTitle}</h1>
         <p><em>Exported on: ${new Date().toLocaleString()}</em></p>
         
         <h2>Comparative Draft Review</h2>
@@ -836,7 +836,7 @@ app.post("/api/documents/export", (req: any, res) => {
       <div style="font-family: Arial, sans-serif;">
         <h1 style="color: #1a365d; border-bottom: 2px solid #1a365d; padding-bottom: 8px;">CookieCare Privacy Compliance Audit</h1>
         <div style="margin: 20px 0; padding: 15px; background: #f7fafc; border-left: 4px solid #3182ce;">
-          <p style="margin: 2px 0;">Target Scan: <strong>${payload?.url || title}</strong></p>
+          <p style="margin: 2px 0;">Target Scan: <strong>${payload?.url || finalTitle}</strong></p>
           <p style="margin: 2px 0;">Overall Cookie Trust Score: <span style="background: #e2e8f0; padding: 4px 8px; border-radius: 4px; font-weight: bold;">${payload?.score || "80%"}</span></p>
           <p style="margin: 2px 0;"><em>Audit completed at: ${new Date().toLocaleString()}</em></p>
         </div>
@@ -877,7 +877,7 @@ app.post("/api/documents/export", (req: any, res) => {
   } else {
     bodyHtml = `
       <div style="font-family: 'Times New Roman', Georgia, serif; line-height: 1.8; text-align: justify;">
-        <h1 style="text-align: center; font-size: 20pt; margin-bottom: 30px; font-weight: bold; text-transform: uppercase;">${title}</h1>
+        <h1 style="text-align: center; font-size: 20pt; margin-bottom: 30px; font-weight: bold; text-transform: uppercase;">${finalTitle}</h1>
         <div style="font-size: 11pt; padding: 10px 0;">
           ${content ? content.replace(/\n/g, "<br/>") : "No agreement drafting contents found."}
         </div>
@@ -907,7 +907,7 @@ app.post("/api/documents/export", (req: any, res) => {
       </body>
       </html>
     `;
-    res.setHeader("Content-Disposition", `attachment; filename="${title.replace(/\s+/g, "_")}.doc"`);
+    res.setHeader("Content-Disposition", `attachment; filename="${finalTitle.replace(/\s+/g, "_")}.doc"`);
     res.setHeader("Content-Type", "application/msword");
     return res.end(Buffer.from(docxWrapper, "utf-8"));
   } else {
@@ -916,7 +916,7 @@ app.post("/api/documents/export", (req: any, res) => {
       <html>
       <head>
         <meta charset="utf-8">
-        <title>${title}</title>
+        <title>${finalTitle}</title>
         <style>
           @media print {
             body { margin: 0; padding: 20px; font-size: 11pt; }
