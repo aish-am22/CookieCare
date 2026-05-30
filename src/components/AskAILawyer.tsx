@@ -306,49 +306,37 @@ export default function AskAILawyer({ authToken, documents = [] }: AskAILawyerPr
   };
 
   // 7. EXPORT UTILITIES
-  const triggerExport = (format: "Word" | "PDF") => {
+  const triggerExport = async (format: "Word" | "PDF") => {
     if (!streamedResult) return;
     
     setExportMessage(`Exporting research dossier to standard ${format}...`);
-    setTimeout(() => setExportMessage(""), 3000);
-
-    if (format === "Word") {
+    try {
+      const exportFormat = format === "Word" ? "docx" : "pdf";
       const header = `CookieCare AI Advisory - Legal Research Dossier\nExported: ${new Date().toLocaleString()}\nFormat Style: ${selectedFormat}\nJurisdictions: ${selectedJurisdictions.join(", ")}\n\n===========================================\n\n`;
-      const blob = new Blob([header + streamedResult], { type: "application/msword" });
+      const res = await fetch("/api/documents/export", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + authToken,
+        },
+        body: JSON.stringify({
+          title: "CookieCare AI Legal Advisory Docket",
+          contentType: "risk_report",
+          content: header + streamedResult,
+          format: exportFormat,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Export failed");
+      }
+      const blob = await res.blob();
       const link = document.createElement("a");
       link.href = URL.createObjectURL(blob);
-      link.download = `cookiecare_ai_lawyer_advisory_${Date.now()}.doc`;
+      link.download = `cookiecare_ai_lawyer_advisory_${Date.now()}.${format === "Word" ? "doc" : "pdf"}`;
       link.click();
-    } else {
-      // PDF trigger via Print friendly format in a new frame or simple download format
-      const printWindow = window.open("", "_blank");
-      if (printWindow) {
-        printWindow.document.write(`
-          <html>
-            <head>
-              <title>CookieCare AI Lawyer - Research Dossier</title>
-              <style>
-                body { font-family: -apple-system, sans-serif; padding: 40px; color: #111; line-height: 1.6; }
-                h1 { border-bottom: 2px solid #000; padding-bottom: 10px; font-size: 24px; text-transform: uppercase; }
-                h3 { font-size: 16px; margin-top: 30px; text-transform: uppercase; background: #000; color: #fff; padding: 6px 12px; display: inline-block; }
-                pre { background: #f4f4f4; padding: 15px; border-left: 4px solid #000; font-family: monospace; white-space: pre-wrap; }
-                footer { margin-top: 50px; font-size: 11px; border-top: 1px solid #ddd; padding-top: 15px; color: #666; font-family: monospace; }
-              </style>
-            </head>
-            <body>
-              <h1>CookieCare AI Legal Advisory Docket</h1>
-              <p><strong>System Date:</strong> ${new Date().toLocaleString()}</p>
-              <p><strong>Format Framework:</strong> ${selectedFormat}</p>
-              <p><strong>Target Jurisdictions:</strong> ${selectedJurisdictions.join(", ")}</p>
-              <hr />
-              <div>${streamedResult.replace(/\n/g, "<br>")}</div>
-              <footer>*Protected by FIPS-compliance standards. Created on CookieCare Security Sandbox.</footer>
-            </body>
-          </html>
-        `);
-        printWindow.document.close();
-        printWindow.print();
-      }
+    } finally {
+      setExportMessage("");
     }
   };
 

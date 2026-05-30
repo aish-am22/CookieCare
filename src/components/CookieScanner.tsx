@@ -170,15 +170,44 @@ ${g.remediation}
 Report secured and validated by Cookie Care FIPS Sandbox services.`;
   };
 
-  const downloadReportFile = (format: "pdf" | "docx") => {
-    const textData = makeReportContentString();
-    const blob = new Blob([textData], { type: "text/plain;charset=utf-8" });
-    const element = document.createElement("a");
-    element.href = URL.createObjectURL(blob);
-    element.download = `CookieCare_Compliance_${result?.scanSummary.url.replace(/https?:\/\/|www\./gi, "").replace(/[\.\s\/]/gi, "_")}.${format}`;
-    document.body.appendChild(element);
-    element.click();
-    document.body.removeChild(element);
+  const downloadReportFile = async (format: "pdf" | "docx") => {
+    if (!result) return;
+    try {
+      const res = await fetch("/api/documents/export", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + authToken,
+        },
+        body: JSON.stringify({
+          title: `Cookie Compliance ${result.scanSummary.url}`,
+          contentType: "cookie_report",
+          content: makeReportContentString(),
+          payload: {
+            url: result.scanSummary.url,
+            score: `${result.scanSummary.overallScore}/100`,
+            cookies: result.cookiesDetected,
+            gaps: result.complianceGaps,
+          },
+          format,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Report export failed.");
+      }
+
+      const blob = await res.blob();
+      const element = document.createElement("a");
+      element.href = URL.createObjectURL(blob);
+      element.download = `CookieCare_Compliance_${result.scanSummary.url.replace(/https?:\/\/|www\./gi, "").replace(/[\.\s\/]/gi, "_")}.${format}`;
+      document.body.appendChild(element);
+      element.click();
+      document.body.removeChild(element);
+    } catch (err: any) {
+      setError(err.message || "Unable to export scanner report.");
+    }
   };
 
   return (

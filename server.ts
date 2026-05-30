@@ -3,7 +3,7 @@ import http from "http";
 import path from "path";
 import fs from "fs";
 import net from "net";
-import { createServer as createViteServer } from "vite";
+import cors from "cors";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
 import multer from "multer";
@@ -14,7 +14,7 @@ import { jobQueue } from "./services/jobQueue";
 import analyzeRouter from "./routes/analyze";
 import askLawyerRouter from "./routes/askLawyer";
 import negotiateRouter from "./routes/negotiate";
-import vulnerabilitiesRouter from "./routes/vulnerabilities";
+import { generatePdfBuffer } from "./services/pdfGenerator";
 
 const orchestrator = new AgentOrchestrator();
 const cookieScannerNode = new CookieScannerNode();
@@ -45,6 +45,10 @@ const ai = new GoogleGenAI({
 const app = express();
 const httpServer = http.createServer(app);
 const DEFAULT_PORT = Number(process.env.PORT) || 3000;
+const corsOrigins = (process.env.CORS_ORIGIN || "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -77,12 +81,26 @@ const upload = multer({
 // Increase payload parsing limit for large documents and "files"
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
+app.use(
+  cors({
+    origin: corsOrigins.length > 0 ? corsOrigins : true,
+    credentials: true,
+  }),
+);
 
 // Mount Document Intelligence routing
 app.use("/api/analyze", analyzeRouter);
 app.use("/api/lawyer", askLawyerRouter);
 app.use("/api/negotiate", negotiateRouter);
-app.use("/api", vulnerabilitiesRouter);
+
+app.get("/api/health", (_req, res) => {
+  res.status(200).json({
+    status: "ok",
+    mode: process.env.NODE_ENV || "development",
+    dbConfigured: Boolean(process.env.DATABASE_URL),
+    aiConfigured: Boolean(process.env.GEMINI_API_KEY),
+  });
+});
 
 const DB_PATH = path.join(process.cwd(), "db.json");
 
@@ -499,8 +517,17 @@ app.post("/api/auth/register", async (req, res) => {
 
     return res.json({ token: newUserId, user: { id: newUserId, email: email.toLowerCase(), name } });
   } catch (err: any) {
-    console.error("Postgres registration error:", err);
-    return res.status(500).json({ error: "Postgres database registration failure: " + err.message });
+    console.warn("Postgres registration error, falling back to local session store:", err);
+    const db = loadDatabase();
+    const normalizedEmail = email.toLowerCase();
+    const existingUser = db.users.find((u) => u.email.toLowerCase() === normalizedEmail);
+    if (existingUser) {
+      return res.status(400).json({ error: "Email already exists." });
+    }
+    const newUserId = "user_" + Math.random().toString(36).substr(2, 9);
+    db.users.push({ id: newUserId, email: normalizedEmail, name, passwordHash: password });
+    saveDatabase(db);
+    return res.json({ token: newUserId, user: { id: newUserId, email: normalizedEmail, name } });
   }
 });
 
@@ -754,10 +781,14 @@ app.post("/api/documents/upload", authenticateToken, upload.single("file"), asyn
 
 // Enterprise Export Engine (PDF / DOCX Generation)
 app.post("/api/documents/export", (req: any, res) => {
-  const { title, format, contentType, content, payload } = req.body;
+  const { title, format = "pdf", contentType, content, payload } = req.body;
   if (!title) {
     return res.status(400).json({ error: "Missing required parameter: title" });
   }
+  if (!contentType) {
+    return res.status(400).json({ error: "Missing required parameter: contentType" });
+  }
+  const contentValue = content ?? payload?.content ?? req.body.text ?? "";
 
   let bodyHtml = "";
 
@@ -773,7 +804,7 @@ app.post("/api/documents/export", (req: any, res) => {
         </div>
         
         <h2>Executive Summary</h2>
-        <p>${content || "Regulatory analysis successfully generated."}</p>
+        <p>${contentValue || "Regulatory analysis successfully generated."}</p>
         
         <h2>Identified Risk Items</h2>
         ${risks.length > 0 ? risks.map((r: any, idx: number) => `
@@ -824,7 +855,7 @@ app.post("/api/documents/export", (req: any, res) => {
         `).join("") : `
           <div style="margin-top: 10px; padding: 8px; background: #ebf8ff; border-radius: 4px;">
             <strong>Markup Differential:</strong><br/>
-            <div style="margin-top: 5px; font-size: 10pt;">${content || ""}</div>
+            <div style="margin-top: 5px; font-size: 10pt;">${contentValue || ""}</div>
           </div>
         `}
       </div>
@@ -879,7 +910,7 @@ app.post("/api/documents/export", (req: any, res) => {
       <div style="font-family: 'Times New Roman', Georgia, serif; line-height: 1.8; text-align: justify;">
         <h1 style="text-align: center; font-size: 20pt; margin-bottom: 30px; font-weight: bold; text-transform: uppercase;">${title}</h1>
         <div style="font-size: 11pt; padding: 10px 0;">
-          ${content ? content.replace(/\n/g, "<br/>") : "No agreement drafting contents found."}
+          ${contentValue ? contentValue.replace(/\n/g, "<br/>") : "No agreement drafting contents found."}
         </div>
       </div>
     `;
@@ -910,6 +941,11 @@ app.post("/api/documents/export", (req: any, res) => {
     res.setHeader("Content-Disposition", `attachment; filename="${title.replace(/\s+/g, "_")}.doc"`);
     res.setHeader("Content-Type", "application/msword");
     return res.end(Buffer.from(docxWrapper, "utf-8"));
+  } else if (format === "pdf") {
+    const pdfBuffer = generatePdfBuffer(title, bodyHtml);
+    res.setHeader("Content-Disposition", `attachment; filename="${title.replace(/\s+/g, "_")}.pdf"`);
+    res.setHeader("Content-Type", "application/pdf");
+    return res.end(pdfBuffer);
   } else {
     const pdfWrapper = `
       <!DOCTYPE html>
@@ -1619,7 +1655,8 @@ async function startServer() {
 
   // Vite setup for developer sandbox hot compiles
   if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
+    const { createServer } = await import("vite");
+    const vite = await createServer({
       server: {
         middlewareMode: true,
         hmr: {
@@ -1632,12 +1669,14 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    // SPA fallback
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
+    if (process.env.SERVE_STATIC_FRONTEND !== "false") {
+      const distPath = path.join(process.cwd(), "dist");
+      app.use(express.static(distPath));
+      // SPA fallback
+      app.get("*", (req, res) => {
+        res.sendFile(path.join(distPath, "index.html"));
+      });
+    }
   }
 
   httpServer.listen(port, "0.0.0.0", () => {

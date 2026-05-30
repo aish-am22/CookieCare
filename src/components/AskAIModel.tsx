@@ -533,16 +533,42 @@ We conclude that establishing a dual-tier liability structure (a general cap pai
   };
 
   // Simulated Document downloads
-  const handleDownload = (format: "Word" | "PDF") => {
+  const handleDownload = async (format: "Word" | "PDF") => {
+    if (!detailedAnswerText) return;
     setExportMessage(`Packaging research dossier and downloading as ${format}...`);
-    setTimeout(() => {
-      setExportMessage("");
-      const blob = new Blob([detailedAnswerText], { type: "text/plain" });
+    try {
+      const exportFormat = format === "Word" ? "docx" : "pdf";
+      const res = await fetch("/api/documents/export", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + authToken,
+        },
+        body: JSON.stringify({
+          title: "CookieCare AI Research Dossier",
+          contentType: "risk_report",
+          content: detailedAnswerText,
+          format: exportFormat,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Export failed");
+      }
+      const blob = await res.blob();
       const link = document.createElement("a");
       link.href = URL.createObjectURL(blob);
       link.download = `cookiecare_ai_dossier_${Date.now()}.${format === "Word" ? "doc" : "pdf"}`;
       link.click();
-    }, 1500);
+    } catch {
+      const blob = new Blob([detailedAnswerText], { type: "text/plain" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = `cookiecare_ai_dossier_${Date.now()}.${format === "Word" ? "doc" : "txt"}`;
+      link.click();
+    } finally {
+      setExportMessage("");
+    }
   };
 
   return (

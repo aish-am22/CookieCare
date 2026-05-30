@@ -721,8 +721,9 @@ Based on the selected corporate files and regulatory parameters, the agreement p
           "Authorization": `Bearer ${authToken}`
         },
         body: JSON.stringify({
-          text: reportText,
+          title: `${activeReportDocName} Legal Assessment`,
           contentType: "risk_report",
+          content: reportText,
           format: "docx"
         })
       });
@@ -759,8 +760,9 @@ Based on the selected corporate files and regulatory parameters, the agreement p
           "Authorization": `Bearer ${authToken}`
         },
         body: JSON.stringify({
-          text: reportText,
+          title: `${activeReportDocName} Legal Assessment`,
           contentType: "risk_report",
+          content: reportText,
           format: "html"
         })
       });

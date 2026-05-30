@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
+import type { Editor } from "@tiptap/react";
 import { 
   FileEdit, 
   History, 
@@ -52,6 +53,7 @@ import {
   Trash2
 } from "lucide-react";
 import { LegalDocument, Version } from "../types";
+import DraftRichEditor from "./DraftRichEditor";
 
 // ==============================================================================
 // TEMPLATE & CLAUSE COLLECTIONS (Matching Screenshot 5 & 6 Folders)
@@ -249,10 +251,19 @@ interface DraftAgreementProps {
   onSelectDocument: (doc: LegalDocument | null) => void;
 }
 
+function toEditorHtml(content: string) {
+  if (!content) return "<p></p>";
+  if (/<[a-z][\s\S]*>/i.test(content)) return content;
+  return content
+    .split("\n")
+    .map((line) => `<p>${line || "<br>"}</p>`)
+    .join("");
+}
+
 export default function DraftAgreement({ documents, authToken, onRefresh, onSelectDocument }: DraftAgreementProps) {
   // Current active draft or editor context
   const [selectedDoc, setSelectedDoc] = useState<LegalDocument | null>(documents[0] || null);
-  const [editorContent, setEditorContent] = useState(selectedDoc ? selectedDoc.content : "");
+  const [editorContent, setEditorContent] = useState(selectedDoc ? toEditorHtml(selectedDoc.content) : "<p></p>");
   const [isSaving, setIsSaving] = useState(false);
   const [savingMsg, setSavingMsg] = useState("");
   
@@ -268,8 +279,6 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
   const [shareEmail, setShareEmail] = useState("");
   const [requestSignEmail, setRequestSignEmail] = useState("");
   const [signerName, setSignerName] = useState("");
-
-  const editorRef = useRef<HTMLTextAreaElement>(null);
 
   // --- AI GENERATOR WORKSPACE STATES ---
   const [mode, setMode] = useState<"Basic" | "Advanced">("Basic");
@@ -339,16 +348,16 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
   const [isAiRefiningText, setIsAiRefiningText] = useState(false);
   const undoStackRef = useRef<string[]>([]);
   const redoStackRef = useRef<string[]>([]);
-  const editorSelectionRef = useRef<{ start: number; end: number } | null>(null);
+  const [richEditor, setRichEditor] = useState<Editor | null>(null);
 
   // Sync editor if document selection alters
   useEffect(() => {
     if (selectedDoc) {
-      setEditorContent(selectedDoc.content);
+      setEditorContent(toEditorHtml(selectedDoc.content));
       setIsGeneratorActive(false);
       undoStackRef.current = [];
       redoStackRef.current = [];
-      editorSelectionRef.current = null;
+      setSelectedTextRange(null);
     }
   }, [selectedDoc]);
 
@@ -364,7 +373,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
     onSelectDocument(null);
     undoStackRef.current = [];
     redoStackRef.current = [];
-    editorSelectionRef.current = null;
+    setSelectedTextRange(null);
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -440,8 +449,25 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
         }
       }
 
-      setUploadText(payload.content);
-      await analyzeUploadedTemplate(payload.content);
+      const uploadedContent = payload.content || (payload.documentId
+        ? await (async () => {
+            const docRes = await fetch(`/api/documents/${payload.documentId}`, {
+              headers: {
+                "Authorization": "Bearer " + authToken,
+              },
+            });
+            if (!docRes.ok) return "";
+            const docPayload = await docRes.json();
+            return docPayload.content || "";
+          })()
+        : "");
+
+      if (!uploadedContent) {
+        throw new Error("Uploaded file content could not be retrieved after processing.");
+      }
+
+      setUploadText(uploadedContent);
+      await analyzeUploadedTemplate(uploadedContent);
       
       if (onRefresh) {
         onRefresh();
@@ -495,103 +521,48 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
   };
 
   const pushUndoSnapshot = (snapshot: string) => {
+    if (!snapshot) return;
     if (undoStackRef.current[0] !== snapshot) {
       undoStackRef.current = [snapshot, ...undoStackRef.current].slice(0, 50);
     }
-    redoStackRef.current = [];
-  };
-
-  const syncEditorSelection = (textarea: HTMLTextAreaElement) => {
-    const selection = {
-      start: textarea.selectionStart ?? 0,
-      end: textarea.selectionEnd ?? textarea.selectionStart ?? 0
-    };
-
-    editorSelectionRef.current = selection;
-    if (selection.start !== selection.end) {
-      setSelectedTextRange(selection);
-      setShowFloatingMenu(true);
-    }
-
-    return selection;
   };
 
   // Insert standard markup helpers
   const insertTextAtCursor = (before: string, after: string = "") => {
-    const textarea = editorRef.current;
-    if (!textarea) return;
-
-    const selection = editorSelectionRef.current ?? syncEditorSelection(textarea);
-    const startPos = selection.start;
-    const endPos = selection.end;
-    const text = textarea.value;
-    const selected = text.substring(startPos, endPos);
-
-    const replacement = before + (selected || "") + after;
-    const newContent = text.substring(0, startPos) + replacement + text.substring(endPos);
-    
-    pushUndoSnapshot(editorContent);
-    setEditorContent(newContent);
-    textarea.focus();
-    setTimeout(() => {
-      const nextStart = startPos + before.length;
-      const nextEnd = nextStart + selected.length;
-      textarea.setSelectionRange(nextStart, nextEnd);
-      editorSelectionRef.current = { start: nextStart, end: nextEnd };
-    }, 10);
+    if (!richEditor) return;
+    const { from, to } = richEditor.state.selection;
+    const selected = richEditor.state.doc.textBetween(from, to, "\n");
+    const replacement = `${before}${selected}${after}`;
+    richEditor.chain().focus().insertContentAt({ from, to }, replacement).run();
   };
 
   const handleUndo = () => {
-    const previous = undoStackRef.current[0];
-    if (previous === undefined) return;
-
-    redoStackRef.current = [editorContent, ...redoStackRef.current].slice(0, 50);
-    undoStackRef.current = undoStackRef.current.slice(1);
-    setEditorContent(previous);
-    editorSelectionRef.current = { start: previous.length, end: previous.length };
+    richEditor?.chain().focus().undo().run();
   };
 
   const handleRedo = () => {
-    const next = redoStackRef.current[0];
-    if (next === undefined) return;
-
-    undoStackRef.current = [editorContent, ...undoStackRef.current].slice(0, 50);
-    redoStackRef.current = redoStackRef.current.slice(1);
-    setEditorContent(next);
-    editorSelectionRef.current = { start: next.length, end: next.length };
+    richEditor?.chain().focus().redo().run();
   };
 
   const transformSelectedLines = (transformLine: (line: string) => string) => {
-    const textarea = editorRef.current;
-    if (!textarea) return;
-
-    const selection = editorSelectionRef.current ?? syncEditorSelection(textarea);
-    const startPos = selection.start;
-    const endPos = selection.end;
-    const text = textarea.value;
-    const selected = text.substring(startPos, endPos);
+    if (!richEditor) return;
+    const { from, to } = richEditor.state.selection;
+    const selected = richEditor.state.doc.textBetween(from, to, "\n");
     if (!selected) return;
 
     const replacement = selected
       .split("\n")
       .map(transformLine)
       .join("\n");
-
-    pushUndoSnapshot(editorContent);
-    const nextContent = text.substring(0, startPos) + replacement + text.substring(endPos);
-    setEditorContent(nextContent);
-    setTimeout(() => {
-      textarea.focus();
-      textarea.setSelectionRange(startPos, startPos + replacement.length);
-      editorSelectionRef.current = { start: startPos, end: startPos + replacement.length };
-    }, 10);
+    richEditor.chain().focus().insertContentAt({ from, to }, replacement).run();
   };
 
   const handleToolbarFormat = (action: string) => {
-    if (action === "h1") insertTextAtCursor("\n# ", "\n");
-    else if (action === "h2") insertTextAtCursor("\n## ", "\n");
-    else if (action === "bold") insertTextAtCursor("**", "**");
-    else if (action === "list") insertTextAtCursor("\n- ", "\n");
+    if (!richEditor) return;
+    if (action === "h1") richEditor.chain().focus().toggleHeading({ level: 1 }).run();
+    else if (action === "h2") richEditor.chain().focus().toggleHeading({ level: 2 }).run();
+    else if (action === "bold") richEditor.chain().focus().toggleBold().run();
+    else if (action === "list") richEditor.chain().focus().toggleBulletList().run();
     else if (action === "disclaimer") {
       insertTextAtCursor(
         "\n*COMPLIANCE DISCLAIMER: This clause represents vetted statutory privacy rules and does not alternate professional legal vetting.*\n"
@@ -612,8 +583,9 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
           "Authorization": `Bearer ${authToken}`
         },
         body: JSON.stringify({
-          text: editorContent,
+          title: selectedTemplateName || selectedDoc?.title || "Legal Agreement Draft",
           contentType: "redlines",
+          content: editorContent,
           format: "docx"
         })
       });
@@ -648,8 +620,9 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
           "Authorization": `Bearer ${authToken}`
         },
         body: JSON.stringify({
-          text: editorContent,
+          title: selectedTemplateName || selectedDoc?.title || "Legal Agreement Draft",
           contentType: "redlines",
+          content: editorContent,
           format: "html"
         })
       });
@@ -671,33 +644,26 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
   };
 
   // Sparkle Tone rewrite triggers
-  const handleEditorSelect = (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
-    const textarea = e.currentTarget;
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    syncEditorSelection(textarea);
-    
-    if (start !== end) {
-      const text = textarea.value.substring(start, end).trim();
-      if (text.length > 0) {
-        // Compute floating coordinates inside viewport
-        const rect = textarea.getBoundingClientRect();
-        // Set coordinates to float nicely above selection
-        setFloatingMenuPos({
-          x: Math.max(20, Math.min(rect.width - 320, 200)),
-          y: Math.max(10, Math.min(rect.height - 240, 130))
-        });
-        setShowFloatingMenu(true);
-      }
-    } else {
+  const handleEditorSelection = (selection: { start: number; end: number } | null) => {
+    if (!selection || !richEditor) {
       setSelectedTextRange(null);
       setShowFloatingMenu(false);
+      return;
     }
+    const selectedText = richEditor.state.doc.textBetween(selection.start, selection.end, "\n").trim();
+    if (!selectedText) {
+      setSelectedTextRange(null);
+      setShowFloatingMenu(false);
+      return;
+    }
+    setSelectedTextRange(selection);
+    setFloatingMenuPos({ x: 200, y: 130 });
+    setShowFloatingMenu(true);
   };
 
   const handleApplyRewrite = (type: string, param: string = "") => {
-    if (!selectedTextRange) return;
-    const originalText = editorContent.substring(selectedTextRange.start, selectedTextRange.end);
+    if (!selectedTextRange || !richEditor) return;
+    const originalText = richEditor.state.doc.textBetween(selectedTextRange.start, selectedTextRange.end, "\n");
     if (!originalText) return;
 
     setIsAiRefiningText(true);
@@ -734,16 +700,15 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
         rewritten = `[AI Custom Instruction: ${param}] ${originalText} complies with specified instructions.`;
       }
 
-      const newContent = editorContent.substring(0, selectedTextRange.start) + rewritten + editorContent.substring(selectedTextRange.end);
-      setEditorContent(newContent);
+      richEditor
+        .chain()
+        .focus()
+        .insertContentAt({ from: selectedTextRange.start, to: selectedTextRange.end }, rewritten)
+        .run();
       setIsAiRefiningText(false);
       setShowFloatingMenu(false);
       setSelectedTextRange(null);
       setAskAiQuery("");
-      editorSelectionRef.current = {
-        start: selectedTextRange.start,
-        end: selectedTextRange.start + rewritten.length
-      };
     }, 1100);
   };
 
@@ -795,7 +760,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
       }
     }
 
-    setEditorContent("");
+    setEditorContent("<p></p>");
     setIsGeneratorActive(false);
 
     // Register active tasks Queue list in local storage
@@ -828,7 +793,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
         } else {
           const chunkStr = words.slice(currentWordIndex, currentWordIndex + 15).join(" ") + " ";
           accumulated += chunkStr;
-          setEditorContent(accumulated);
+          setEditorContent(toEditorHtml(accumulated));
           currentWordIndex += 15;
           setStreamingProgress(`Streaming draft content block-by-block (${accumulated.split(/\s+/).length} words)...`);
         }
@@ -867,7 +832,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
       const finalized = await resUpdate.json();
 
       setSelectedDoc(finalized);
-      setEditorContent(content);
+      setEditorContent(toEditorHtml(content));
       onRefresh();
     } catch (err: any) {
       console.error("Storing generated code failed, using fallback client storage", err);
@@ -896,7 +861,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
       onRefresh();
       
       setSelectedDoc(data);
-      setEditorContent(data.content);
+      setEditorContent(toEditorHtml(data.content));
     } catch (err: any) {
       alert(err.message || "Failed to create agreement draft");
     }
@@ -1014,7 +979,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
       });
       const refreshedDoc = await refreshedDocRes.json();
       setSelectedDoc(refreshedDoc);
-      setEditorContent(refreshedDoc.content);
+      setEditorContent(toEditorHtml(refreshedDoc.content));
       onRefresh();
     } catch (err: any) {
       alert(err.message);
@@ -1023,7 +988,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
 
   const handleVersionRestore = (historicalContent: string, versionNumber: number) => {
     if (!confirm(`Are you sure you want to revert the live draft to Version ${versionNumber}?`)) return;
-    setEditorContent(historicalContent);
+    setEditorContent(toEditorHtml(historicalContent));
     setTimeout(() => {
       handleSaveDraft(`Restored text to match historical Version ${versionNumber}`);
     }, 100);
@@ -1049,7 +1014,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
       });
       const refreshedDoc = await refreshedDocRes.json();
       setSelectedDoc(refreshedDoc);
-      setEditorContent(refreshedDoc.content);
+      setEditorContent(toEditorHtml(refreshedDoc.content));
       onRefresh();
     } catch (err: any) {
       alert(err.message);
@@ -1802,7 +1767,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
             <div className="p-2.5 border-b border-gray-200 bg-white flex items-center justify-center space-x-1.5 overflow-x-auto shrink-0 select-none shadow-xs">
               <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={handleUndo} className="p-1.5 hover:bg-slate-50 text-gray-600 rounded-md transition" title="Undo"><Undo className="w-4 h-4" /></button>
               <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={handleRedo} className="p-1.5 hover:bg-slate-50 text-gray-600 rounded-md transition" title="Redo"><Redo className="w-4 h-4" /></button>
-              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => { pushUndoSnapshot(editorContent); setEditorContent(""); editorSelectionRef.current = { start: 0, end: 0 }; }} className="p-1.5 hover:bg-rose-50 text-rose-600 rounded-md transition" title="Clear Slate"><Eraser className="w-4 h-4" /></button>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => { pushUndoSnapshot(editorContent); setEditorContent("<p></p>"); richEditor?.commands.clearContent(); setSelectedTextRange(null); }} className="p-1.5 hover:bg-rose-50 text-rose-600 rounded-md transition" title="Clear Slate"><Eraser className="w-4 h-4" /></button>
               
               <span className="w-[1px] h-5 bg-gray-200 mx-1" />
               
@@ -1832,8 +1797,8 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
 
               {/* Bold, Italic, Underline */}
               <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => handleToolbarFormat("bold")} className="p-1.5 hover:bg-slate-50 text-gray-700 rounded-md transition font-bold" title="Bold"><Bold className="w-4 h-4" /></button>
-              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertTextAtCursor("_", "_")} className="p-1.5 hover:bg-slate-50 text-gray-700 rounded-md transition italic" title="Italic"><span className="font-serif font-bold text-sm">I</span></button>
-              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertTextAtCursor("<u>", "</u>")} className="p-1.5 hover:bg-slate-50 text-gray-700 rounded-md transition underline" title="Underline"><span className="underline font-bold text-xs">U</span></button>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => richEditor?.chain().focus().toggleItalic().run()} className="p-1.5 hover:bg-slate-50 text-gray-700 rounded-md transition italic" title="Italic"><span className="font-serif font-bold text-sm">I</span></button>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => richEditor?.chain().focus().toggleUnderline().run()} className="p-1.5 hover:bg-slate-50 text-gray-700 rounded-md transition underline" title="Underline"><span className="underline font-bold text-xs">U</span></button>
               
               <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => {
                 const color = window.prompt("Enter a text color name or hex value", "#0F172A");
@@ -1871,7 +1836,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
 
             {/* SECONDARY ACTION BAR DIRECTLY UNDER TOOLBAR (Screenshot 2 / 7) */}
             <div className="bg-slate-50 py-2 border-b border-gray-200 flex justify-center space-x-3 select-none shrink-0">
-              <button onClick={() => { navigator.clipboard.writeText(editorContent); alert("Content Copied to secure clipboard."); }} className="flex items-center space-x-1.5 px-3 py-1 bg-white border border-gray-200 text-xs font-bold text-gray-600 rounded hover:bg-gray-50 hover:text-black shadow-xs transition">
+              <button onClick={() => { navigator.clipboard.writeText(richEditor?.getText() || editorContent); alert("Content Copied to secure clipboard."); }} className="flex items-center space-x-1.5 px-3 py-1 bg-white border border-gray-200 text-xs font-bold text-gray-600 rounded hover:bg-gray-50 hover:text-black shadow-xs transition">
                 <Share2 className="w-3.5 h-3.5" />
                 <span>Copy</span>
               </button>
@@ -1909,9 +1874,9 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
                     className="absolute bg-white border border-gray-200 rounded-lg shadow-xl p-1.5 flex items-center space-x-1 z-30 select-none animate-in fade-in zoom-in duration-100"
                     style={{ left: `${floatingMenuPos.x}px`, top: `${floatingMenuPos.y}px` }}
                   >
-                    <button onClick={() => insertTextAtCursor("**", "**")} className="p-1 px-1.5 hover:bg-slate-50 text-[11px] font-bold text-gray-700 rounded">B</button>
-                    <button onClick={() => insertTextAtCursor("_", "_")} className="p-1 px-1.5 hover:bg-slate-50 text-[11px] italic text-gray-700 rounded">I</button>
-                    <button onClick={() => insertTextAtCursor("<u>", "</u>")} className="p-1 px-1.5 hover:bg-slate-50 text-[11px] underline text-gray-700 rounded">U</button>
+                    <button onClick={() => richEditor?.chain().focus().toggleBold().run()} className="p-1 px-1.5 hover:bg-slate-50 text-[11px] font-bold text-gray-700 rounded">B</button>
+                    <button onClick={() => richEditor?.chain().focus().toggleItalic().run()} className="p-1 px-1.5 hover:bg-slate-50 text-[11px] italic text-gray-700 rounded">I</button>
+                    <button onClick={() => richEditor?.chain().focus().toggleUnderline().run()} className="p-1 px-1.5 hover:bg-slate-50 text-[11px] underline text-gray-700 rounded">U</button>
                     
                     <span className="w-[1px] h-5 bg-gray-200" />
                     
@@ -2000,19 +1965,15 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
                     </div>
                   )}
 
-                  <textarea
-                    ref={editorRef}
-                    onSelect={handleEditorSelect}
-                    onMouseUp={(e) => syncEditorSelection(e.currentTarget)}
-                    onKeyUp={(e) => syncEditorSelection(e.currentTarget)}
-                    value={editorContent}
-                    onChange={(e) => {
+                  <DraftRichEditor
+                    content={editorContent}
+                    onChange={(html) => {
                       pushUndoSnapshot(editorContent);
-                      setEditorContent(e.target.value);
+                      setEditorContent(html);
                     }}
+                    onSelectionChange={handleEditorSelection}
+                    onReady={setRichEditor}
                     disabled={isFullySigned}
-                    className="w-full flex-1 min-h-[640px] border-0 outline-none focus:ring-0 text-sm font-sans tracking-wide leading-relaxed text-gray-800 placeholder-gray-300 resize-none bg-transparent"
-                    placeholder="Begin typing or select templates to trigger agentic intake..."
                   />
                 </div>
 

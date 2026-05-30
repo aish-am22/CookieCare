@@ -374,6 +374,7 @@ class BackgroundJobQueue {
         documentId: newDocId,
         title: fileTitle,
         totalChunks: parseResult.metadata.totalChunks,
+        content: extractedText,
       }
     });
   }
@@ -625,9 +626,40 @@ The partner entities shall act with continuous transparency, safeguarding confid
       status: "completed",
       progress: 100,
       message: `Vulnerability vector report complete for ${url}.`,
-      result,
+      result: normalizeVulnerabilityPayload(result),
     });
   }
+}
+
+function normalizeVulnerabilityPayload(result: any) {
+  if (result?.overallRisk && typeof result.securityScore === "number" && Array.isArray(result.findings)) {
+    return result;
+  }
+  const checks = Array.isArray(result?.checks) ? result.checks : [];
+  const findings = checks.map((check: any) => ({
+    name: check?.name || "Security check",
+    vector: check?.details || "No details available.",
+    severity:
+      check?.status === "CRITICAL"
+        ? "HIGH"
+        : check?.status === "WARNING"
+        ? "MEDIUM"
+        : "LOW",
+    remediation: check?.remediation || "No remediation guidance provided.",
+  }));
+  const securityScore =
+    typeof result?.overallHealth === "number"
+      ? result.overallHealth
+      : typeof result?.securityScore === "number"
+      ? result.securityScore
+      : 0;
+  const overallRisk =
+    securityScore < 60 ? "HIGH" : securityScore < 85 ? "MEDIUM" : "LOW";
+  return {
+    overallRisk,
+    securityScore,
+    findings,
+  };
 }
 
 function sleep(ms: number): Promise<void> {
