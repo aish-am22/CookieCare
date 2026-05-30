@@ -593,13 +593,8 @@ const authenticateToken = async (req: any, res: any, next: any) => {
       user = rows[0];
     }
   } catch (err) {
-    console.warn("Postgres auth lookup failed, falling back to local session store:", err);
-  }
-
-  if (!user) {
-    const db = loadDatabase();
-    // We use user_id directly as token for smooth iframe performance bypass
-    user = db.users.find((u) => u.id === token || u.email === token);
+    console.warn("Postgres auth lookup failed:", err);
+    return res.status(503).json({ error: "Authentication service unavailable." });
   }
 
   if (!user) {
@@ -620,27 +615,23 @@ app.post("/api/auth/register", async (req, res) => {
   }
 
   try {
-    const checkMail = await pool.query("SELECT id FROM users WHERE email = $1", [email.toLowerCase()]);
+    const normalizedEmail = email.toLowerCase();
+    const checkMail = await pool.query("SELECT id FROM users WHERE email = $1", [normalizedEmail]);
     if (checkMail.rows.length > 0) {
       return res.status(400).json({ error: "Email already exists." });
     }
 
     const newUserId = "user_" + Math.random().toString(36).substr(2, 9);
-    await pool.query(
+    const insertResult = await pool.query(
       "INSERT INTO users (id, email, name, password_hash) VALUES ($1, $2, $3, $4)",
-      [newUserId, email.toLowerCase(), name, password]
+      [newUserId, normalizedEmail, name, password]
     );
 
-    // Also update local fallback for dual-persistence alignment
-    try {
-      const db = loadDatabase();
-      db.users.push({ id: newUserId, email: email.toLowerCase(), name, passwordHash: password });
-      saveDatabase(db);
-    } catch (fsErr) {
-      console.warn("Folder sync warning:", fsErr);
+    if (insertResult.rowCount === 0) {
+      return res.status(500).json({ error: "Failed to create user in Postgres." });
     }
 
-    return res.json({ token: newUserId, user: { id: newUserId, email: email.toLowerCase(), name } });
+    return res.json({ token: newUserId, user: { id: newUserId, email: normalizedEmail, name } });
   } catch (err: any) {
     console.error("Postgres registration error:", err);
     return res.status(500).json({ error: "Postgres database registration failure: " + err.message });
@@ -654,9 +645,10 @@ app.post("/api/auth/login", async (req, res) => {
   }
 
   try {
+    const normalizedEmail = email.toLowerCase();
     const { rows } = await pool.query(
       "SELECT id, email, name, password_hash FROM users WHERE email = $1 AND password_hash = $2",
-      [email.toLowerCase(), password]
+      [normalizedEmail, password]
     );
 
     if (rows.length > 0) {
@@ -664,20 +656,11 @@ app.post("/api/auth/login", async (req, res) => {
       return res.json({ token: user.id, user: { id: user.id, email: user.email, name: user.name } });
     }
   } catch (err) {
-    console.warn("Postgres login connection alert - attempting fallback authentication sync:", err);
+    console.error("Postgres login connection alert:", err);
+    return res.status(503).json({ error: "Authentication service unavailable." });
   }
 
-  // Backup file-system alignment checking representation
-  const db = loadDatabase();
-  const user = db.users.find(
-    (u) => u.email.toLowerCase() === email.toLowerCase() && u.passwordHash === password
-  );
-
-  if (!user) {
-    return res.status(401).json({ error: "Invalid email or password." });
-  }
-
-  res.json({ token: user.id, user: { id: user.id, email: user.email, name: user.name } });
+  return res.status(401).json({ error: "Invalid email or password." });
 });
 
 
