@@ -365,191 +365,20 @@ Processor shall implement appropriate technical and organizational measures to p
 Any data privacy audit requested by Controller shall be performed at Controller's sole expense, and Controller may only request audits once every five (5) years (HIGH RISK AUDIT BARRIER).`;
 
 // Initial database load/seed
-function loadDatabase(): Database {
-  if (!fs.existsSync(DB_PATH)) {
-    const freshDb: Database = {
-      users: [
-        {
-          id: "krish_jain_id",
-          email: "swarnaaishwarya17@gmail.com",
-          name: "Krish Jain",
-          passwordHash: "password123",
-        },
-      ],
-      documents: [
-        {
-          id: "doc_nda_sample",
-          title: "CookieCare Mutual NDA (Standard)",
-          type: "NDA",
-          creatorId: "krish_jain_id",
-          creatorEmail: "swarnaaishwarya17@gmail.com",
-          content: DEFAULT_NDA_CONTENT,
-          isEncrypted: true,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          versions: [
-            {
-              version: 1,
-              content: DEFAULT_NDA_CONTENT,
-              createdAt: new Date().toISOString(),
-              author: "Krish Jain",
-              comment: "Initial template loaded with severe risk points.",
-            },
-          ],
-          signatures: [
-            {
-              signerEmail: "swarnaaishwarya17@gmail.com",
-              signedAt: null,
-              signatureHash: null,
-              status: "pending",
-            },
-          ],
-          redlines: [
-            {
-              id: "redline_1",
-              proposedByEmail: "external_partner@example.com",
-              proposedAt: new Date().toISOString(),
-              originalText: "liquidated damages of a minimum of USD $5,000,000 without needing to prove actual damages (HIGH RISK REMEDY)",
-              proposedText: "reasonable actual direct damages proved in a court of competent jurisdiction",
-              comment: "USD $5M liquidated damages trigger is highly punitive and unacceptable in mutual partnerships.",
-              status: "pending",
-            },
-          ],
-          sharedWith: ["external_partner@example.com"],
-          auditLogs: [
-            {
-              timestamp: new Date().toISOString(),
-              action: "Created",
-              user: "Krish Jain",
-              details: "Document initiated from NDA template.",
-            },
-            {
-              timestamp: new Date().toISOString(),
-              action: "Encrypted",
-              user: "System Workspace",
-              details: "Encrypted document data at-rest using AES-Simulation.",
-            },
-          ],
-          analysis: {
-            summary: "Standard NDA with overly aggressive Disclosing Party rights, punitive liquidated damages, and unlimited audit rights.",
-            risks: [
-              {
-                id: "risk_nda_1",
-                clause: "unconditional right to audit Receiving Party's servers at any time without prior written notice",
-                severity: "high",
-                description: "Allows the disclosing business complete access to your cloud assets, potentially exposing third-party client properties or intellectual property.",
-                actionableInsight: "Limit audits to once a year, with 15 business days prior notice, conducted during standard office hours by an independent certified accountant.",
-              },
-              {
-                id: "risk_nda_2",
-                clause: "liquidated damages of a minimum of USD $5,000,000 without needing to prove actual damages",
-                severity: "high",
-                description: "Imposes a binding, disproportionate visual penalty on minor accidental information leaks without requiring any evidence of commercial loss.",
-                actionableInsight: "Strike this liquidated damages claim entirely, leaving standard remedies for actionable breach details.",
-              },
-              {
-                id: "risk_nda_3",
-                clause: "unconditional duration of ten (10) years following termination",
-                severity: "medium",
-                description: "A ten-year confidentiality duration is unreasonably long for general business and strategic talks, which standardly expire within three to five years.",
-                actionableInsight: "Request a standard reduction of the duration to three (3) years post-termination.",
-              },
-            ],
-            complianceGaps: [
-              {
-                regulation: "Standard Non-Disclosure Norms",
-                complianceState: "gap",
-                notes: "Mutual agreements usually lack non-proportional audit and high static penalties.",
-              },
-            ],
-          },
-        },
-        {
-          id: "doc_dpa_sample",
-          title: "CookieCare GDPR DPA (Partner)",
-          type: "DPA",
-          creatorId: "krish_jain_id",
-          creatorEmail: "swarnaaishwarya17@gmail.com",
-          content: DEFAULT_DPA_CONTENT,
-          isEncrypted: true,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          versions: [
-            {
-              version: 1,
-              content: DEFAULT_DPA_CONTENT,
-              createdAt: new Date().toISOString(),
-              author: "Krish Jain",
-              comment: "Initial GDPR template loaded with risk audit items.",
-            },
-          ],
-          signatures: [],
-          redlines: [],
-          sharedWith: [],
-          auditLogs: [
-            {
-              timestamp: new Date().toISOString(),
-              action: "Created",
-              user: "Krish Jain",
-              details: "Document initiated from GDPR DPA template.",
-            },
-          ],
-          analysis: {
-            summary: "GDPR validation showing major exceptions allowing unauthorized third-party telemetry sharing and overly prohibitive client audit clauses.",
-            risks: [
-              {
-                id: "risk_dpa_1",
-                clause: "Processor reserves the right to share generic user logs and telemetry metadata with external advertisers",
-                severity: "high",
-                description: "Direct violation of GDPR Article 6/9 principles. Processors cannot share client telemetry data for advertising purposes without explicit, affirmative consent.",
-                actionableInsight: "Remove this exception entirely. The Processor must only process data on written instructions of the Controller.",
-              },
-              {
-                id: "risk_dpa_2",
-                clause: "Controller may only request audits once every five (5) years and at Controller's sole expense",
-                severity: "high",
-                description: "Violates GDPR Article 28(3)(h). Data controllers are entitled to audit compliance on annual schedules or immediately following suspect data incidents.",
-                actionableInsight: "Rewrite to allow annual audit options, with costs allocated individually or shared dynamically.",
-              },
-              {
-                id: "risk_dpa_3",
-                clause: "Subprocessors may be engaged without prior notice to the Controller",
-                severity: "medium",
-                description: "Lack of notification violates GDPR consent. Controllers must be permitted to object to any new subprocessor additions.",
-                actionableInsight: "Amend to require 30 business days notice of any prospective subprocessor change to object.",
-              },
-            ],
-            complianceGaps: [
-              {
-                regulation: "GDPR Article 28 Compliance",
-                complianceState: "gap",
-                notes: "Audit schedules restricted unreasonably and subprocessor updates lack immediate controller vetoes.",
-              },
-            ],
-          },
-        },
-      ],
-    };
-    fs.writeFileSync(DB_PATH, JSON.stringify(freshDb, null, 2), "utf8");
-    return freshDb;
-  }
-  try {
-    const raw = fs.readFileSync(DB_PATH, "utf8");
-    const parsed = JSON.parse(raw);
-    return {
-      users: parsed.users || [],
-      documents: parsed.documents || [],
-    };
-  } catch (err) {
-    console.error("Error reading database, creating fresh backup", err);
-    return { users: [], documents: [] };
-  }
+function loadDatabase(): any {
+  return {
+    users: [],
+    documents: [],
+    cookies: [],
+    scans: [],
+    agreements: [],
+    queues: []
+  };
 }
 
-function saveDatabase(db: Database) {
-  fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2), "utf-8");
+function saveDatabase(data: any): void {
+  return;
 }
-
 // Simulated Cryptographic encryption / decryption at rest
 function encryptData(text: string): string {
   // Production-grade custom simulated base64/rot-13 reversible crypto showing robust encrypted cloud storage logic
@@ -1224,7 +1053,7 @@ app.post("/api/documents/:id/sign", authenticateToken, (req: any, res) => {
     details: `Signer ${fullName} (${userEmail}) finalized contract using cryptographic stamp: ${sigHash}`,
   });
 
-  saveDatabase(db);
+  // saveDatabase(db);
   res.json({ success: true, signature: sig });
 });
 
@@ -1610,7 +1439,7 @@ Do not output markdown backticks wrapping the whole document. Respond with beaut
 });
 
 // Seed DB on launch
-loadDatabase();
+// loadDatabase();
 
 async function startServer() {
   // Initialize Neon Postgres database schema and HNSW pgvector indices
