@@ -83,7 +83,17 @@ app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 app.use(
   cors({
-    origin: corsOrigins.length > 0 ? corsOrigins : true,
+    origin: (origin, callback) => {
+      if (!origin) {
+        callback(null, true);
+        return;
+      }
+
+      const allowed = corsOrigins.length
+        ? corsOrigins.includes(origin)
+        : /^https?:\/\/localhost(?::\d+)?$/i.test(origin);
+      callback(allowed ? null : new Error("CORS policy blocked this origin"), allowed);
+    },
     credentials: true,
   }),
 );

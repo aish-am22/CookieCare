@@ -3,17 +3,40 @@ function escapePdfText(text: string): string {
 }
 
 function sanitizePlainText(input: string): string {
-  return input
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
+  const stripped = stripHtmlTags(input);
+  return decodeBasicEntities(stripped)
     .replace(/\r/g, "")
     .replace(/[^\x09\x0A\x0D\x20-\x7E]/g, " ")
     .trim();
+}
+
+function stripHtmlTags(input: string): string {
+  let result = "";
+  let inTag = false;
+  for (let i = 0; i < input.length; i += 1) {
+    const char = input[i];
+    if (char === "<") {
+      inTag = true;
+      continue;
+    }
+    if (char === ">") {
+      inTag = false;
+      result += " ";
+      continue;
+    }
+    if (!inTag) {
+      result += char;
+    }
+  }
+  return result;
+}
+
+function decodeBasicEntities(input: string): string {
+  return input
+    .split("&nbsp;").join(" ")
+    .split("&amp;").join("&")
+    .split("&lt;").join("<")
+    .split("&gt;").join(">");
 }
 
 function wrapLine(line: string, maxChars: number): string[] {
