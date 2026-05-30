@@ -679,32 +679,35 @@ app.post("/api/documents/upload", authenticateToken, upload.single("file"), asyn
   const originalName = file.originalname;
   const mimeType = file.mimetype;
   const ext = originalName.split(".").pop()?.toLowerCase();
-
   const fileTitle = title || originalName.substring(0, originalName.lastIndexOf(".")) || originalName;
   const typeOfDocument = templateType || (ext ? ext.toUpperCase() : "TXT");
   const isTemplateVal = isTemplate === "true" || is_template === "true" || isTemplate === true || is_template === true;
 
-  // Enqueue a non-blocking background job
-  const job = jobQueue.enqueue(req.user.id, "file_processing", {
-    fileBufferBase64: file.buffer.toString("base64"),
-    originalName,
-    mimeType,
-    ext,
-    fileTitle,
-    typeOfDocument,
-    isTemplateVal,
-    user: {
-      id: req.user.id,
-      name: req.user.name,
-      email: req.user.email,
-    },
-  });
+  try {
+    // 1. File ke buffer ko Base64 string banao (Koi local file write nahi!)
+    const fileDataBytes = file.buffer.toString("base64");
 
-  res.status(202).json({
-    success: true,
-    job_id: job.id,
-    message: "File processing sub-agent worker started.",
-  });
+    // 2. Seedha Neon Postgres database ke andar document aur uska content patak do
+    const result = await pool.query(
+      `INSERT INTO documents (title, name, type, content, user_id, is_template, mime_type, created_at) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW()) RETURNING *`,
+      [fileTitle, originalName, typeOfDocument, fileDataBytes, req.user.id, isTemplateVal, mimeType]
+    );
+
+    // 3. Frontend ko bina crash kiye success response bhej do!
+    res.status(201).json({
+      success: true,
+      message: "Document uploaded and secured in database successfully!",
+      document: result.rows[0]
+    });
+
+  } catch (error: any) {
+    console.error("Upload error details:", error);
+    res.status(500).json({ 
+      error: "Database upload failed", 
+      details: error.message 
+    });
+  }
 });
 
 // Enterprise Export Engine (PDF / DOCX Generation)
