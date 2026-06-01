@@ -11,7 +11,11 @@ import multer from "multer";
 import PDFDocument from "pdfkit";
 import { Document, Packer, Paragraph, TextRun, HeadingLevel } from "docx";
 import nodemailer from "nodemailer";
-import { dbInit, pool, chunkAndIndexDocument, semanticSearch } from "./db";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+import pdfParse from "pdf-parse";
+import mammoth from "mammoth";
+import { dbInit, pool, chunkAndIndexDocument, semanticSearch, authenticateToken } from "./db";
 import { AgentOrchestrator } from "./services/agentOrchestrator";
 import { CookieScannerNode, VulnerabilityScannerNode } from "./services/scannerNodes";
 import { jobQueue } from "./services/jobQueue";
@@ -49,6 +53,7 @@ const ai = new GoogleGenAI({
 const app = express();
 const httpServer = http.createServer(app);
 const DEFAULT_PORT = Number(process.env.PORT) || 3000;
+const DB_ENABLED = Boolean(process.env.DATABASE_URL?.trim());
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -366,18 +371,40 @@ Any data privacy audit requested by Controller shall be performed at Controller'
 
 // Initial database load/seed
 function loadDatabase(): any {
-  return {
+  const defaultDb = {
     users: [],
+    folders: [],
+    files: [],
     documents: [],
     cookies: [],
     scans: [],
     agreements: [],
-    queues: []
+    queues: [],
+    reports: [],
+    projects: [],
+    project_files: [],
+    notifications: [],
   };
+
+  try {
+    const dbPath = path.join(process.cwd(), "db.json");
+    if (!fs.existsSync(dbPath)) {
+      return defaultDb;
+    }
+    const parsed = JSON.parse(fs.readFileSync(dbPath, "utf8"));
+    return { ...defaultDb, ...parsed };
+  } catch {
+    return defaultDb;
+  }
 }
 
 function saveDatabase(data: any): void {
-  return;
+  try {
+    const dbPath = path.join(process.cwd(), "db.json");
+    fs.writeFileSync(dbPath, JSON.stringify(data, null, 2), "utf8");
+  } catch {
+    // ignore local fallback write errors
+  }
 }
 // Simulated Cryptographic encryption / decryption at rest
 function encryptData(text: string): string {
@@ -399,71 +426,98 @@ function decryptData(text: string): string {
 (global as any).encryptData = encryptData;
 (global as any).decryptData = decryptData;
 
-// Authentication Token Verification Middleware
-const authenticateToken = async (req: any, res: any, next: any) => {
-  const authHeader = req.headers["authorization"];
-  if (!authHeader) {
-    return res.status(401).json({ error: "Access denied. Token missing." });
+function createJwtForUser(user: { id: string; email: string; name: string }) {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    throw new Error("Server misconfigured: JWT_SECRET missing.");
+  }
+  return jwt.sign({ id: user.id, email: user.email, name: user.name }, secret, { expiresIn: "7d" });
+}
+
+async function extractTextFromFile(file: Express.Multer.File): Promise<string> {
+  const mime = String(file.mimetype || "").toLowerCase();
+  const name = String(file.originalname || "").toLowerCase();
+
+  if (mime.includes("text/plain") || name.endsWith(".txt")) {
+    return file.buffer.toString("utf8");
   }
 
-  const token = authHeader.split(" ")[1];
-  if (!token) {
-    return res.status(401).json({ error: "Access denied. Token invalid." });
+  if (mime.includes("pdf") || name.endsWith(".pdf")) {
+    const parsed = await pdfParse(file.buffer);
+    const text = String(parsed.text || "").trim();
+    if (!text) throw new Error("Could not extract text from PDF.");
+    return text;
   }
 
-  let user: any = null;
-
-  try {
-    const { rows } = await pool.query(
-      "SELECT id, email, name FROM users WHERE id = $1 OR email = $2",
-      [token, token]
-    );
-    if (rows.length > 0) {
-      user = rows[0];
-    }
-  } catch (err) {
-    console.warn("Postgres auth lookup failed:", err);
-    return res.status(503).json({ error: "Authentication service unavailable." });
+  if (
+    mime.includes("application/vnd.openxmlformats-officedocument.wordprocessingml.document") ||
+    name.endsWith(".docx")
+  ) {
+    const parsed = await mammoth.extractRawText({ buffer: file.buffer });
+    const text = String(parsed.value || "").trim();
+    if (!text) throw new Error("Could not extract text from DOCX.");
+    return text;
   }
 
-  if (!user) {
-    return res.status(403).json({ error: "Unauthorized or invalid user session." });
-  }
-
-  req.user = user;
-  next();
-};
+  const fallback = file.buffer.toString("utf8").trim();
+  if (fallback) return fallback;
+  throw new Error("Unsupported file type. Upload PDF, DOCX, or TXT.");
+}
 
 /* --- API ENDPOINTS --- */
 
 // 1. Auth System
 app.post("/api/auth/register", async (req, res) => {
-  const { email, password, name } = req.body;
-  if (!email || !password || !name) {
+  const { email, password, confirmPassword, name } = req.body || {};
+  if (!email || !password || !confirmPassword || !name) {
     return res.status(400).json({ error: "Please enter all required fields." });
+  }
+  if (password !== confirmPassword) {
+    return res.status(400).json({ error: "Passwords do not match." });
+  }
+  if (String(password).length < 8) {
+    return res.status(400).json({ error: "Password must be at least 8 characters." });
   }
 
   try {
-    const normalizedEmail = email.toLowerCase();
-    const checkMail = await pool.query("SELECT id FROM users WHERE email = $1", [normalizedEmail]);
-    if (checkMail.rows.length > 0) {
-      return res.status(400).json({ error: "Email already exists." });
+    const normalizedEmail = String(email).toLowerCase().trim();
+    const passwordHash = await bcrypt.hash(String(password), 10);
+    const newUserId = `user_${Math.random().toString(36).slice(2, 11)}`;
+
+    if (DB_ENABLED) {
+      const checkMail = await pool.query("SELECT id FROM users WHERE LOWER(email) = LOWER($1)", [normalizedEmail]);
+      if (checkMail.rows.length > 0) {
+        return res.status(409).json({ error: "Email already exists." });
+      }
+
+      await pool.query("INSERT INTO users (id, email, name, password_hash) VALUES ($1, $2, $3, $4)", [
+        newUserId,
+        normalizedEmail,
+        name,
+        passwordHash,
+      ]);
+    } else {
+      const db = loadDatabase();
+      const exists = db.users.some((u: any) => String(u.email).toLowerCase() === normalizedEmail);
+      if (exists) {
+        return res.status(409).json({ error: "Email already exists." });
+      }
+      db.users.push({
+        id: newUserId,
+        email: normalizedEmail,
+        name: String(name),
+        password_hash: passwordHash,
+        created_at: new Date().toISOString(),
+      });
+      saveDatabase(db);
     }
 
-    const newUserId = "user_" + Math.random().toString(36).substr(2, 9);
-    const insertResult = await pool.query(
-      "INSERT INTO users (id, email, name, password_hash) VALUES ($1, $2, $3, $4)",
-      [newUserId, normalizedEmail, name, password]
-    );
-
-    if (insertResult.rowCount === 0) {
-      return res.status(500).json({ error: "Failed to create user in Postgres." });
-    }
-
-    return res.json({ token: newUserId, user: { id: newUserId, email: normalizedEmail, name } });
+    const user = { id: newUserId, email: normalizedEmail, name: String(name) };
+    const token = createJwtForUser(user);
+    return res.status(201).json({ token, user });
   } catch (err: any) {
-    console.error("Postgres registration error:", err);
-    return res.status(500).json({ error: "Postgres database registration failure: " + err.message });
+    console.error("Registration error:", err);
+    return res.status(500).json({ error: err.message || "Registration failed." });
   }
 });
 
@@ -474,22 +528,47 @@ app.post("/api/auth/login", async (req, res) => {
   }
 
   try {
-    const normalizedEmail = email.toLowerCase();
-    const { rows } = await pool.query(
-      "SELECT id, email, name, password_hash FROM users WHERE email = $1 AND password_hash = $2",
-      [normalizedEmail, password]
-    );
+    const normalizedEmail = String(email).toLowerCase().trim();
 
-    if (rows.length > 0) {
+    if (DB_ENABLED) {
+      const { rows } = await pool.query("SELECT id, email, name, password_hash FROM users WHERE LOWER(email) = LOWER($1)", [
+        normalizedEmail,
+      ]);
+      if (!rows.length) {
+        return res.status(401).json({ error: "Invalid email or password." });
+      }
       const user = rows[0];
-      return res.json({ token: user.id, user: { id: user.id, email: user.email, name: user.name } });
+      const ok = await bcrypt.compare(String(password), String(user.password_hash || ""));
+      if (!ok) {
+        return res.status(401).json({ error: "Invalid email or password." });
+      }
+      const payloadUser = { id: String(user.id), email: String(user.email), name: String(user.name || "") };
+      return res.json({ token: createJwtForUser(payloadUser), user: payloadUser });
     }
+
+    const db = loadDatabase();
+    const user = db.users.find((u: any) => String(u.email).toLowerCase() === normalizedEmail);
+    if (!user) {
+      return res.status(401).json({ error: "Invalid email or password." });
+    }
+    const ok = await bcrypt.compare(String(password), String(user.password_hash || ""));
+    if (!ok) {
+      return res.status(401).json({ error: "Invalid email or password." });
+    }
+    const payloadUser = { id: String(user.id), email: String(user.email), name: String(user.name || "") };
+    return res.json({ token: createJwtForUser(payloadUser), user: payloadUser });
   } catch (err) {
-    console.error("Postgres login connection alert:", err);
+    console.error("Login error:", err);
     return res.status(503).json({ error: "Authentication service unavailable." });
   }
+});
 
-  return res.status(401).json({ error: "Invalid email or password." });
+app.get("/api/users/me", authenticateToken, async (req: any, res) => {
+  return res.json({
+    id: String(req.user?.id || ""),
+    email: String(req.user?.email || ""),
+    name: String(req.user?.name || ""),
+  });
 });
 
 
@@ -523,9 +602,20 @@ app.get("/api/jobs/stream", (req: any, res) => {
     return res.status(401).json({ error: "Access denied. Credentials token required." });
   }
 
-  // Align checking representation with users
-  const db = loadDatabase();
-  const user = db.users.find((u: any) => u.id === token || u.email === token);
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    return res.status(500).json({ error: "Server misconfigured: JWT_SECRET missing." });
+  }
+
+  let user: { id: string; email?: string } | null = null;
+  try {
+    const payload = jwt.verify(token, secret) as jwt.JwtPayload & { id?: string; email?: string };
+    if (payload?.id) {
+      user = { id: String(payload.id), email: payload.email ? String(payload.email) : undefined };
+    }
+  } catch {
+    user = null;
+  }
   if (!user) {
     return res.status(403).json({ error: "Unauthorized session tracking signature." });
   }
@@ -549,164 +639,317 @@ app.get("/api/jobs/stream", (req: any, res) => {
 
 // 2. Document System
 app.get("/api/documents", authenticateToken, async (req: any, res) => {
-  const userId = req.user.id;
-  const userEmail = req.user.email.toLowerCase();
-
+  const userId = String(req.user.id);
   try {
-    const { rows } = await pool.query(
-      "SELECT * FROM files WHERE creator_id = $1 OR shared_with::jsonb @> $2::jsonb ORDER BY created_at DESC",
-      [userId, JSON.stringify([userEmail])]
-    );
-
-    if (rows.length > 0) {
-      const docs = rows.map((r) => ({
-        id: r.id,
-        title: r.title,
-        type: r.type,
-        creatorId: r.creator_id,
-        creatorEmail: r.creator_email,
-        content: r.is_encrypted ? decryptData(r.content) : r.content,
-        isEncrypted: r.is_encrypted,
-        createdAt: r.created_at,
-        updatedAt: r.updated_at,
-        versions: r.versions,
-        signatures: r.signatures,
-        redlines: r.redlines,
-        sharedWith: r.shared_with,
-        auditLogs: r.audit_logs,
-        analysis: r.analysis,
-      }));
-      return res.json(docs);
+    if (DB_ENABLED) {
+      const { rows } = await pool.query(
+        `SELECT id, title, type, content, creator_id, creator_email, folder_id, created_at, updated_at, versions, signatures, redlines, shared_with, audit_logs, analysis
+         FROM files
+         WHERE creator_id = $1
+         ORDER BY created_at DESC`,
+        [userId],
+      );
+      return res.json(
+        rows.map((r) => ({
+          id: r.id,
+          title: r.title,
+          type: r.type,
+          content: r.content,
+          creatorId: r.creator_id,
+          creatorEmail: r.creator_email,
+          folderId: r.folder_id,
+          createdAt: r.created_at,
+          updatedAt: r.updated_at,
+          versions: r.versions,
+          signatures: r.signatures,
+          redlines: r.redlines,
+          sharedWith: r.shared_with,
+          auditLogs: r.audit_logs,
+          analysis: r.analysis,
+        })),
+      );
     }
   } catch (err) {
-    console.warn("Neon Postgres load error - returning local backups:", err);
+    console.warn("Postgres load error - falling back to local storage:", err);
   }
 
-  // Dual Fallback matching JSON
   const db = loadDatabase();
-  const userDocs = db.documents.filter(
-    (doc) =>
-      doc.creatorId === userId ||
-      doc.sharedWith.some((e) => e.toLowerCase() === userEmail)
-  );
+  const docs = (db.files || [])
+    .filter((doc: any) => String(doc.creator_id) === userId)
+    .sort((a: any, b: any) => String(b.created_at || "").localeCompare(String(a.created_at || "")))
+    .map((doc: any) => ({
+      id: doc.id,
+      title: doc.title,
+      type: doc.type,
+      content: doc.content,
+      creatorId: doc.creator_id,
+      creatorEmail: doc.creator_email,
+      folderId: doc.folder_id,
+      createdAt: doc.created_at,
+      updatedAt: doc.updated_at || doc.created_at,
+      versions: doc.versions || [],
+      signatures: doc.signatures || [],
+      redlines: doc.redlines || [],
+      sharedWith: doc.shared_with || [],
+      auditLogs: doc.audit_logs || [],
+      analysis: doc.analysis || null,
+    }));
+  res.json(docs);
+});
 
-  const processedDocs = userDocs.map((doc) => {
-    let plainContent = doc.content;
-    if (doc.isEncrypted) {
-      plainContent = decryptData(doc.content);
+app.get("/api/folders", authenticateToken, async (req: any, res) => {
+  const userId = String(req.user.id);
+  try {
+    if (DB_ENABLED) {
+      const { rows } = await pool.query(
+        "SELECT id, name, user_id, created_at FROM folders WHERE user_id = $1 ORDER BY created_at DESC",
+        [userId],
+      );
+      return res.json({ folders: rows });
     }
-    return { ...doc, content: plainContent };
-  });
+  } catch (err) {
+    console.warn("Postgres folders read failed:", err);
+  }
 
-  res.json(processedDocs);
+  const db = loadDatabase();
+  const folders = (db.folders || [])
+    .filter((f: any) => String(f.user_id) === userId)
+    .sort((a: any, b: any) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+  return res.json({ folders });
+});
+
+app.post("/api/folders", authenticateToken, async (req: any, res) => {
+  const userId = String(req.user.id);
+  const name = String(req.body?.name || "").trim();
+  if (!name) return res.status(400).json({ error: "Folder name is required." });
+
+  const folderId = `folder_${Math.random().toString(36).slice(2, 11)}`;
+  try {
+    if (DB_ENABLED) {
+      const { rows } = await pool.query(
+        "INSERT INTO folders (id, name, user_id) VALUES ($1, $2, $3) RETURNING id, name, user_id, created_at",
+        [folderId, name, userId],
+      );
+      return res.status(201).json({ folder: rows[0] });
+    }
+  } catch (err: any) {
+    console.error("Postgres folder create failed:", err);
+    return res.status(500).json({ error: err.message || "Failed to create folder." });
+  }
+
+  const db = loadDatabase();
+  const folder = { id: folderId, name, user_id: userId, created_at: new Date().toISOString() };
+  db.folders = db.folders || [];
+  db.folders.push(folder);
+  saveDatabase(db);
+  return res.status(201).json({ folder });
+});
+
+app.delete("/api/folders/:id", authenticateToken, async (req: any, res) => {
+  const userId = String(req.user.id);
+  const folderId = String(req.params.id || "");
+  if (!folderId) return res.status(400).json({ error: "Folder id is required." });
+
+  try {
+    if (DB_ENABLED) {
+      const owned = await pool.query("SELECT id FROM folders WHERE id = $1 AND user_id = $2", [folderId, userId]);
+      if (!owned.rows.length) return res.status(404).json({ error: "Folder not found." });
+      await pool.query("UPDATE files SET folder_id = NULL WHERE folder_id = $1 AND creator_id = $2", [folderId, userId]);
+      await pool.query("DELETE FROM folders WHERE id = $1 AND user_id = $2", [folderId, userId]);
+      return res.json({ ok: true });
+    }
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || "Failed to delete folder." });
+  }
+
+  const db = loadDatabase();
+  const idx = (db.folders || []).findIndex((f: any) => String(f.id) === folderId && String(f.user_id) === userId);
+  if (idx < 0) return res.status(404).json({ error: "Folder not found." });
+  db.folders.splice(idx, 1);
+  for (const file of db.files || []) {
+    if (String(file.folder_id || "") === folderId && String(file.creator_id) === userId) {
+      file.folder_id = null;
+    }
+  }
+  saveDatabase(db);
+  return res.json({ ok: true });
 });
 
 app.get("/api/documents/:id", authenticateToken, async (req: any, res) => {
-  const userId = req.user.id;
-  const userEmail = req.user.email?.toLowerCase() || "";
+  const userId = String(req.user.id);
+  const userEmail = String(req.user.email || "").toLowerCase();
 
   try {
-    const { rows } = await pool.query("SELECT * FROM files WHERE id = $1", [req.params.id]);
-    if (rows.length > 0) {
-      const r = rows[0];
-      const isShared = r.shared_with.some((e: string) => e.toLowerCase() === userEmail);
-      const isOwner = r.creator_id === userId;
+    if (DB_ENABLED) {
+      const { rows } = await pool.query("SELECT * FROM files WHERE id = $1", [req.params.id]);
+      if (rows.length > 0) {
+        const r = rows[0];
+        const sharedWith = Array.isArray(r.shared_with) ? r.shared_with : [];
+        const isShared = sharedWith.some((e: string) => String(e).toLowerCase() === userEmail);
+        const isOwner = String(r.creator_id) === userId;
 
-      if (!isOwner && !isShared) {
-        return res.status(403).json({ error: "Access denied to this document." });
+        if (!isOwner && !isShared) {
+          return res.status(403).json({ error: "Access denied to this document." });
+        }
+
+        return res.json({
+          id: r.id,
+          title: r.title,
+          type: r.type,
+          creatorId: r.creator_id,
+          creatorEmail: r.creator_email,
+          content: r.content,
+          folderId: r.folder_id,
+          isEncrypted: false,
+          createdAt: r.created_at,
+          updatedAt: r.updated_at,
+          versions: r.versions || [],
+          signatures: r.signatures || [],
+          redlines: r.redlines || [],
+          sharedWith,
+          auditLogs: r.audit_logs || [],
+          analysis: r.analysis || null,
+        });
       }
-
-      const doc = {
-        id: r.id,
-        title: r.title,
-        type: r.type,
-        creatorId: r.creator_id,
-        creatorEmail: r.creator_email,
-        content: r.is_encrypted ? decryptData(r.content) : r.content,
-        isEncrypted: r.is_encrypted,
-        createdAt: r.created_at,
-        updatedAt: r.updated_at,
-        versions: (r.versions || []).map((v: any) => ({
-          ...v,
-          content: v.content.startsWith("LEXENC_") ? decryptData(v.content) : v.content,
-        })),
-        signatures: r.signatures,
-        redlines: r.redlines,
-        sharedWith: r.shared_with,
-        auditLogs: r.audit_logs,
-        analysis: r.analysis,
-      };
-      return res.json(doc);
     }
   } catch (err) {
     console.warn("Neon Postgres detail query alert - attempting local JSON search:", err);
   }
 
   const db = loadDatabase();
-  const doc = db.documents.find((d) => d.id === req.params.id);
+  const doc = (db.files || []).find((d: any) => String(d.id) === String(req.params.id));
   if (!doc) {
     return res.status(404).json({ error: "Document not found." });
   }
 
-  const isShared = doc.sharedWith.some((e) => e.toLowerCase() === userEmail);
-  const isOwner = doc.creatorId === userId;
+  const sharedWith = Array.isArray(doc.shared_with) ? doc.shared_with : [];
+  const isShared = sharedWith.some((e: string) => String(e).toLowerCase() === userEmail);
+  const isOwner = String(doc.creator_id) === userId;
 
   if (!isOwner && !isShared) {
     return res.status(403).json({ error: "Access denied to this document." });
   }
 
-  let plainContent = doc.content;
-  if (doc.isEncrypted) {
-    plainContent = decryptData(doc.content);
-  }
-
-  const plainVersions = doc.versions.map((v) => ({
-    ...v,
-    content: v.content.startsWith("LEXENC_") ? decryptData(v.content) : v.content,
-  }));
-
-  res.json({ ...doc, content: plainContent, versions: plainVersions });
+  res.json({
+    id: doc.id,
+    title: doc.title,
+    type: doc.type,
+    creatorId: doc.creator_id,
+    creatorEmail: doc.creator_email,
+    content: doc.content,
+    folderId: doc.folder_id,
+    isEncrypted: false,
+    createdAt: doc.created_at,
+    updatedAt: doc.updated_at || doc.created_at,
+    versions: doc.versions || [],
+    signatures: doc.signatures || [],
+    redlines: doc.redlines || [],
+    sharedWith,
+    auditLogs: doc.audit_logs || [],
+    analysis: doc.analysis || null,
+  });
 });
 
 // Secure Document Ingestion Vault - Robust File Upload Engine
 app.post("/api/documents/upload", authenticateToken, upload.single("file"), async (req: any, res) => {
   const file = req.file;
-  if (!file) {
-    return res.status(400).json({ error: "No file was uploaded." });
+  const userId = String(req.user.id);
+  const userEmail = String(req.user.email || "");
+  const now = new Date().toISOString();
+
+  if (!file && typeof req.body?.content !== "string") {
+    return res.status(400).json({ error: "Provide a file upload or text content." });
   }
 
-  const { title, templateType, isTemplate, is_template } = req.body;
-  const originalName = file.originalname;
-  const mimeType = file.mimetype;
-  const ext = originalName.split(".").pop()?.toLowerCase();
-  const fileTitle = title || originalName.substring(0, originalName.lastIndexOf(".")) || originalName;
-  const typeOfDocument = templateType || (ext ? ext.toUpperCase() : "TXT");
-  const isTemplateVal = isTemplate === "true" || is_template === "true" || isTemplate === true || is_template === true;
+  const incomingTitle = String(req.body?.title || file?.originalname || "uploaded_document").trim();
+  const folderId = req.body?.folderId ? String(req.body.folderId) : null;
+  const typeRaw = String(req.body?.type || file?.originalname?.split(".").pop() || "txt");
+  const type = typeRaw.toLowerCase();
 
   try {
-    // 1. File ke buffer ko Base64 string banao (Koi local file write nahi!)
-    const fileDataBytes = file.buffer.toString("base64");
+    const content = file ? await extractTextFromFile(file) : String(req.body?.content || "");
+    if (!content.trim()) {
+      return res.status(400).json({ error: "Extracted document text is empty." });
+    }
 
-    // 2. Seedha Neon Postgres database ke andar document aur uska content patak do
-    const result = await pool.query(
-      `INSERT INTO documents (title, name, type, content, user_id, is_template, mime_type, created_at) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW()) RETURNING *`,
-      [fileTitle, originalName, typeOfDocument, fileDataBytes, req.user.id, isTemplateVal, mimeType]
-    );
+    if (DB_ENABLED) {
+      if (folderId) {
+        const ownedFolder = await pool.query("SELECT id FROM folders WHERE id = $1 AND user_id = $2", [folderId, userId]);
+        if (!ownedFolder.rows.length) {
+          return res.status(403).json({ error: "Folder does not belong to current user." });
+        }
+      }
 
-    // 3. Frontend ko bina crash kiye success response bhej do!
-    res.status(201).json({
-      success: true,
-      message: "Document uploaded and secured in database successfully!",
-      document: result.rows[0]
+      const fileId = `doc_${Math.random().toString(36).slice(2, 11)}`;
+      const result = await pool.query(
+        `INSERT INTO files (id, title, type, content, creator_id, creator_email, folder_id, mime_type)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING id, title, type, content, creator_id, creator_email, folder_id, created_at, updated_at`,
+        [fileId, incomingTitle, type, content, userId, userEmail, folderId, file?.mimetype || "text/plain"],
+      );
+
+      const row = result.rows[0];
+      return res.status(201).json({
+        message: "Document uploaded",
+        document: {
+          id: row.id,
+          title: row.title,
+          type: row.type,
+          content: row.content,
+          folderId: row.folder_id,
+          createdAt: row.created_at,
+          createdBy: row.creator_email,
+        },
+      });
+    }
+
+    const db = loadDatabase();
+    if (folderId) {
+      const folderOwned = (db.folders || []).some((f: any) => String(f.id) === folderId && String(f.user_id) === userId);
+      if (!folderOwned) {
+        return res.status(403).json({ error: "Folder does not belong to current user." });
+      }
+    }
+
+    const fileId = `doc_${Math.random().toString(36).slice(2, 11)}`;
+    db.files = db.files || [];
+    db.files.push({
+      id: fileId,
+      title: incomingTitle,
+      type,
+      content,
+      creator_id: userId,
+      creator_email: userEmail,
+      folder_id: folderId,
+      mime_type: file?.mimetype || "text/plain",
+      created_at: now,
+      updated_at: now,
+      versions: [],
+      signatures: [],
+      redlines: [],
+      shared_with: [],
+      audit_logs: [],
+      analysis: null,
     });
+    saveDatabase(db);
 
+    return res.status(201).json({
+      message: "Document uploaded",
+      document: {
+        id: fileId,
+        title: incomingTitle,
+        type,
+        content,
+        folderId,
+        createdAt: now,
+        createdBy: userEmail,
+      },
+    });
   } catch (error: any) {
     console.error("Upload error details:", error);
-    res.status(500).json({ 
-      error: "Database upload failed", 
-      details: error.message 
-    });
+    const message = error?.message || "Upload failed";
+    const status = message.startsWith("Unsupported") || message.includes("extract") ? 400 : 500;
+    res.status(status).json({ error: message });
   }
 });
 

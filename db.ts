@@ -1,6 +1,7 @@
 import pg from "pg";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
+import jwt from "jsonwebtoken";
 import {
   hasDatabaseConnectionString,
   redactDatabaseUrlForLogs,
@@ -93,6 +94,7 @@ export async function dbInit() {
         title VARCHAR(255) NOT NULL,
         type VARCHAR(50) NOT NULL,
         content TEXT NOT NULL,
+        mime_type VARCHAR(255),
         creator_id VARCHAR(255) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         creator_email VARCHAR(255) NOT NULL,
         is_encrypted BOOLEAN DEFAULT FALSE,
@@ -106,6 +108,11 @@ export async function dbInit() {
         audit_logs JSONB DEFAULT '[]'::jsonb,
         analysis JSONB DEFAULT NULL
       );
+    `);
+
+    await client.query(`
+      ALTER TABLE files
+      ADD COLUMN IF NOT EXISTS mime_type VARCHAR(255);
     `);
 
     // 5. Create legal_document_chunks table with 768-dim embeddings
@@ -168,7 +175,7 @@ export async function dbInit() {
       id: "krish_jain_id",
       email: "swarnaaishwarya17@gmail.com",
       name: "Krish Jain",
-      passwordHash: "password123",
+      passwordHash: await (await import("bcryptjs")).hash("password123", 10),
     };
 
     await client.query(`
@@ -535,19 +542,24 @@ export async function authenticateToken(req: any, res: any, next: any) {
   }
 
   try {
-    const { rows } = await pool.query(
-      "SELECT id, email, name FROM users WHERE id = $1 OR email = $2",
-      [token, token]
-    );
-
-    if (rows.length === 0) {
-      return res.status(401).json({ error: "Unauthorized or invalid user session." });
+    const secret = process.env.JWT_SECRET;
+    if (!secret) {
+      return res.status(500).json({ error: "Server misconfigured: JWT_SECRET missing." });
     }
 
-    req.user = rows[0];
+    const payload = jwt.verify(token, secret) as jwt.JwtPayload & { id?: string; email?: string; name?: string };
+    if (!payload?.id || !payload?.email) {
+      return res.status(403).json({ error: "Unauthorized or invalid user session." });
+    }
+
+    req.user = {
+      id: String(payload.id),
+      email: String(payload.email),
+      name: payload.name ? String(payload.name) : "",
+    };
     next();
   } catch (err) {
-    console.error("Auth middleware database verification error:", err);
-    return res.status(401).json({ error: "Access denied. Invalid token sessions." });
+    console.error("Auth middleware JWT verification error:", err);
+    return res.status(403).json({ error: "Access denied. Invalid token sessions." });
   }
 }

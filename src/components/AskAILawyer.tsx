@@ -75,36 +75,9 @@ export default function AskAILawyer({ authToken, documents = [] }: AskAILawyerPr
   ]);
 
   // 2. KNOWLEDGE BASE FOLDERS STATE
-  const [folders, setFolders] = useState<KBFolder[]>([
-    {
-      id: "folder_1",
-      name: "Privacy Policies & DPA",
-      isSelected: true,
-      files: [
-        { name: "gdpr_data_privacy_addendum.pdf", type: "PDF", size: "12.4 MB", content: "Data processing standard clauses for GDPR Article 28 parameters." },
-        { name: "cookie_consent_tracker_policy.docx", type: "DOCX", size: "4.2 MB", content: "Client facing cookie banner and tracking tag scripts consent clauses." }
-      ]
-    },
-    {
-      id: "folder_2",
-      name: "Direct Taxes & Audits",
-      isSelected: false,
-      files: [
-        { name: "form_16_scrutiny_audit_2025.pdf", type: "PDF", size: "28.1 MB", content: "Tax assessment statement matching direct tax scrutiny notices." },
-        { name: "gstin_reconciliation_q3.csv", type: "CSV", size: "1.8 MB", content: "Reconciliation numbers matching corporate tax declarations." }
-      ]
-    },
-    {
-      id: "folder_3",
-      name: "Delaware Corporate Bylaws",
-      isSelected: true,
-      files: [
-        { name: "cookiecare_delaware_bylaws_revised.docx", type: "DOCX", size: "8.5 MB", content: "Board of director authorization limits and stockholder notice parameters." }
-      ]
-    }
-  ]);
+  const [folders, setFolders] = useState<KBFolder[]>([]);
   const [newFolderName, setNewFolderName] = useState("");
-  const [activeFolderForUpload, setActiveFolderForUpload] = useState<string>("folder_1");
+  const [activeFolderForUpload, setActiveFolderForUpload] = useState<string>("");
 
   // File Upload input ref
   const fileUploadRef = useRef<HTMLInputElement>(null);
@@ -122,6 +95,56 @@ export default function AskAILawyer({ authToken, documents = [] }: AskAILawyerPr
   const [exportMessage, setExportMessage] = useState("");
 
   const chatBottomRef = useRef<HTMLDivElement>(null);
+
+  const formatFileSize = (bytes: number) => {
+    if (!bytes || Number.isNaN(bytes)) return "0 KB";
+    const kb = bytes / 1024;
+    if (kb < 1024) return `${kb.toFixed(1)} KB`;
+    return `${(kb / 1024).toFixed(1)} MB`;
+  };
+
+  const loadFoldersAndFiles = async () => {
+    if (!authToken) return;
+    try {
+      const [foldersResp, docsResp] = await Promise.all([
+        fetch(apiUrl("/api/folders"), { headers: { Authorization: "Bearer " + authToken } }),
+        fetch(apiUrl("/api/documents"), { headers: { Authorization: "Bearer " + authToken } }),
+      ]);
+
+      if (!foldersResp.ok) throw new Error("Failed to load folders");
+      if (!docsResp.ok) throw new Error("Failed to load documents");
+
+      const foldersBody = await foldersResp.json();
+      const docsBody = await docsResp.json();
+      const folderRows = foldersBody.folders || [];
+      const docsRows = Array.isArray(docsBody) ? docsBody : docsBody.documents || [];
+
+      const nextFolders: KBFolder[] = folderRows.map((f: any, idx: number) => ({
+        id: String(f.id),
+        name: String(f.name),
+        isSelected: idx === 0,
+        files: docsRows
+          .filter((d: any) => String(d.folderId ?? d.folder_id ?? "") === String(f.id))
+          .map((d: any) => ({
+            name: String(d.title || "Untitled"),
+            type: String(d.type || "TXT").toUpperCase(),
+            size: formatFileSize(String(d.content || "").length),
+            content: String(d.content || ""),
+          })),
+      }));
+      setFolders(nextFolders);
+      if (nextFolders.length && !activeFolderForUpload) {
+        setActiveFolderForUpload(nextFolders[0].id);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load folders");
+    }
+  };
+
+  useEffect(() => {
+    loadFoldersAndFiles();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authToken]);
 
   // Available Jurisdictions mapping
   const availableJurisdictions = [
@@ -142,51 +165,70 @@ export default function AskAILawyer({ authToken, documents = [] }: AskAILawyerPr
     );
   };
 
-  const handleAddFolder = (e: React.FormEvent) => {
+  const handleAddFolder = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newFolderName.trim()) return;
-    const newFolder: KBFolder = {
-      id: "folder_" + Date.now(),
-      name: newFolderName.trim(),
-      isSelected: true,
-      files: []
-    };
-    setFolders([...folders, newFolder]);
-    setNewFolderName("");
+    try {
+      const resp = await fetch(apiUrl("/api/folders"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer " + authToken,
+        },
+        body: JSON.stringify({ name: newFolderName.trim() }),
+      });
+      const body = await resp.json();
+      if (!resp.ok) throw new Error(body.error || "Failed to create folder");
+      await loadFoldersAndFiles();
+      setActiveFolderForUpload(String(body.folder?.id || ""));
+      setNewFolderName("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create folder");
+    }
   };
 
   const toggleFolderSelection = (id: string) => {
     setFolders(prev => prev.map(f => f.id === id ? { ...f, isSelected: !f.isSelected } : f));
   };
 
-  const handleDeleteFolder = (id: string, e: React.MouseEvent) => {
+  const handleDeleteFolder = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    setFolders(prev => prev.filter(f => f.id !== id));
+    try {
+      const resp = await fetch(apiUrl(`/api/folders/${id}`), {
+        method: "DELETE",
+        headers: { Authorization: "Bearer " + authToken },
+      });
+      const body = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(body.error || "Failed to delete folder");
+      await loadFoldersAndFiles();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete folder");
+    }
   };
 
-  const handleFileUploadSimulated = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("title", file.name);
+      formData.append("type", file.name.split(".").pop()?.toLowerCase() || "txt");
+      if (activeFolderForUpload) {
+        formData.append("folderId", activeFolderForUpload);
+      }
 
-    // Simulate file reading and parsing
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const contentText = (event.target?.result as string) || "Mock text file compliance contents uploaded to corporate enclave.";
-      const newFile: FileContext = {
-        name: file.name,
-        type: file.name.split(".").pop()?.toUpperCase() || "TXT",
-        size: (file.size / (1024 * 1024)).toFixed(1) + " MB",
-        content: contentText
-      };
-
-      setFolders(prev => prev.map(f => {
-        if (f.id === activeFolderForUpload) {
-          return { ...f, files: [...f.files, newFile] };
-        }
-        return f;
-      }));
-    };
-    reader.readAsText(file);
+      const response = await fetch(apiUrl("/api/documents/upload"), {
+        method: "POST",
+        headers: { Authorization: "Bearer " + authToken },
+        body: formData,
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Failed to upload document");
+      await loadFoldersAndFiles();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Upload failed");
+    }
   };
 
   const handleAddWebUrl = (e: React.FormEvent) => {
@@ -594,7 +636,7 @@ export default function AskAILawyer({ authToken, documents = [] }: AskAILawyerPr
               ref={fileUploadRef}
               className="hidden"
               accept=".pdf,.docx,.doc,.csv,.txt,.png,.jpg,.jpeg"
-              onChange={handleFileUploadSimulated}
+              onChange={handleFileUpload}
             />
           </div>
 
