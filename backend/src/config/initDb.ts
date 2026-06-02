@@ -65,10 +65,10 @@ export async function dbInit() {
       );
     `);
 
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS legal_document_chunks_hnsw_idx
-      ON legal_document_chunks USING hnsw (embedding vector_cosine_ops);
-    `);
+    // await client.query(`
+    //   CREATE INDEX IF NOT EXISTS legal_document_chunks_hnsw_idx
+    //   ON legal_document_chunks USING hnsw (embedding vector_cosine_ops);
+    // `);
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS agent_execution_logs (

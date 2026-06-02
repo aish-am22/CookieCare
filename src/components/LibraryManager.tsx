@@ -168,11 +168,13 @@ export default function LibraryManager({ documents, authToken, onRefresh }: Libr
     const confirmed = window.confirm("Are you sure you want to delete this piece of personalization?");
     if (confirmed) {
       try {
-        const endpoint = activeTab === "files" ? `/api/folders/${id}` : `/api/library-items/${id}`;
-        const res = await fetch(apiUrl(endpoint), {
-          method: "DELETE",
-          headers: { "Authorization": `Bearer ${authToken}` }
-        });
+       const endpoint = activeTab === "files" ? `/api/folders/${id}` : `/api/documents/${id}`;
+const backendUrl = window.location.origin;
+
+const res = await fetch(`${backendUrl}${endpoint}`, {
+  method: "DELETE",
+  headers: { "Authorization": `Bearer ${authToken}` }
+});
         if (res.ok) {
           fetchLibraryData();
           setSelectedFolder(null);

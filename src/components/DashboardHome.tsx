@@ -32,22 +32,27 @@ export default function DashboardHome({ userName, setActiveTab, stats, documents
     return `${days} day${days === 1 ? "" : "s"} ago`;
   };
 
-  const continuousLogs = documents.length > 0
+ const continuousLogs = (documents && documents.length > 0)
     ? documents.map((doc) => {
-        const riskCount = doc.analysis?.risks?.length ?? 0;
-        const score = Math.max(0, 100 - (riskCount * 15) - (doc.redlines?.filter((r) => r.status === "pending").length ?? 0) * 5);
-        const bannerState = doc.type === "NDA" || doc.type === "DPA" ? "FOUND" : (doc.sharedWith.length > 0 ? "FOUND" : "MISSING");
+        // Ultimate safety using standard optional chaining before length property
+        const riskCount = (doc as any)?.analysis?.risks?.length ?? 0;
+        const pendingRedlines = ((doc as any)?.redlines || [])?.filter((r: any) => r.status === "pending")?.length ?? 0;
+        const score = Math.max(0, 100 - (riskCount * 15) - (pendingRedlines * 5));
+        
+        // Fully bypassed type-safe fallback for multi-environment
+        const sharedCount = ((doc as any)?.shared_with || (doc as any)?.sharedWith || []).length;
+        const bannerState = (doc as any)?.type === "NDA" || (doc as any)?.type === "DPA" ? "FOUND" : (sharedCount > 0 ? "FOUND" : "MISSING");
 
         return {
-          target: doc.title,
+          target: (doc as any)?.title || "Untitled Document",
           score,
-          issues: riskCount + (doc.redlines?.filter((r) => r.status === "pending").length ?? 0),
+          issues: riskCount + pendingRedlines,
           banner: bannerState,
-          scanTime: timeAgo(doc.updatedAt || doc.createdAt),
+          scanTime: timeAgo((doc as any)?.updatedAt || (doc as any)?.createdAt || new Date().toISOString()),
         };
       })
     : [];
-
+    
   return (
     <div className="flex-1 overflow-y-auto p-10 font-sans grid-bg min-h-screen">
       {/* Header section */}
