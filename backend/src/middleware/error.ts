@@ -5,6 +5,10 @@ export interface ApiError extends Error {
 }
 
 export const errorHandler = (err: ApiError, req: Request, res: Response, next: NextFunction): void => {
+  const alreadyEnded = res.writableEnded || res.headersSent;
+  if (alreadyEnded) {
+    return;
+  }
   console.error(err.stack);
   res.status(err.status || 500).json({
     error: err.message || "Internal Server Error",

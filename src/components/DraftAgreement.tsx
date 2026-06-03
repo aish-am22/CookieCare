@@ -793,14 +793,19 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
     setIsGeneratorActive(false);
 
     try {
+      const controller = new AbortController();
+      const timeoutMs = 120_000;
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
       const res = await fetch(apiUrl("/api/drafting/generate-stream"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${authToken}`
         },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        signal: controller.signal
       });
+      clearTimeout(timeout);
 
       if (!res.ok) throw new Error("Drafting stream failed");
 
@@ -824,10 +829,11 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
       handleCreateAndSaveGeneratedDoc(documentTitle, accumulated);
 
     } catch (err: any) {
+      const errorMessage = err?.name === "AbortError" ? "Drafting timed out" : (err?.message || "Drafting failed");
       console.error(err);
       setIsStreaming(false);
       setStreamingProgress("");
-      alert("Drafting failed: " + err.message);
+      alert("Drafting failed: " + errorMessage);
     }
   };
 
