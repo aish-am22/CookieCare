@@ -7,25 +7,59 @@ import { AnalysisAgent } from "./analysisAgent.js";
 import { NegotiationAgent } from "./negotiationAgent.js";
 import { AskLawyerAgent } from "./askLawyerAgent.js";
 
-const genAI = new GoogleGenAI({ apiKey: config.geminiApiKey || "dummy" });
+export interface ExecutionLog {
+  agent: string;
+  task: string;
+  path: string;
+  timestamp: string;
+  durationMs: number;
+  fallback_triggered: boolean;
+  metadata?: any;
+}
+
+export interface AgentDecision {
+  outcome: string;
+  confidence: number;
+  reasoning: string;
+  actionTaken: string;
+}
 
 export class AgentOrchestrator {
-  private draftingAgent = new DraftingAgent();
-  private analysisAgent = new AnalysisAgent();
-  private negotiationAgent = new NegotiationAgent();
-  private askLawyerAgent = new AskLawyerAgent();
+  public draftingAgent = new DraftingAgent();
+  public analysisAgent = new AnalysisAgent();
+  public negotiationAgent = new NegotiationAgent();
+  public askLawyerAgent = new AskLawyerAgent();
 
-  async runAnalysis(documentId: string, content: string, userId: string): Promise<string> {
+  async runAnalysis(documentId: string, content: string, userId: string): Promise<any> {
+    const startedAt = Date.now();
     try {
-      const result = await this.analysisAgent.analyzeDocuments([content], "Comprehensive risk and compliance audit.");
+      const result = await this.analysisAgent.runAudit(content, "NDA"); // Assuming NDA for now or extracting from metadata
+
       await pool.query(
         "UPDATE files SET analysis = $1 WHERE id = $2 AND creator_id = $3",
-        [JSON.stringify({ summary: result }), documentId, userId]
+        [JSON.stringify(result), documentId, userId]
       );
+
+      await this.saveAgentLogs({
+        fileId: documentId,
+        userId,
+        status: "success",
+        executionPath: [{
+          agent: "AnalysisAgent",
+          task: "Audit",
+          path: "Orchestrator -> AnalysisAgent",
+          timestamp: new Date().toISOString(),
+          durationMs: Date.now() - startedAt,
+          fallback_triggered: false
+        }],
+        decisions: { "AnalysisAgent": { outcome: "Audit complete", confidence: 100, reasoning: "Heuristic/AI scan", actionTaken: "Updated file analysis" } },
+        confidenceScore: 100
+      });
+
       return result;
     } catch (err) {
       console.error("AgentOrchestrator runAnalysis failed:", err);
-      return "Analysis failed due to a system error.";
+      throw err;
     }
   }
 
@@ -37,6 +71,14 @@ export class AgentOrchestrator {
       console.error("AgentOrchestrator askLawyer failed:", err);
       return "An error occurred while consulting the AI attorney.";
     }
+  }
+
+  async runDrafting(inputs: any): Promise<string> {
+    return await this.draftingAgent.draftDocument(inputs);
+  }
+
+  async remediate(clauseText: string, riskType: string): Promise<any> {
+    return await this.negotiationAgent.draftRedline(clauseText, riskType);
   }
 
   async interactAnalyze(
@@ -83,15 +125,7 @@ export class AgentOrchestrator {
 
       return {
         analysis,
-        clauses: [
-          {
-            id: "c1",
-            clauseText: "Identified during real-time scan.",
-            severity: "medium",
-            reason: "Compliance check triggered.",
-            remediation: "Review with legal counsel."
-          }
-        ]
+        clauses: []
       };
     } catch (err: any) {
       console.error("AgentOrchestrator interactAnalyze failed:", err);
@@ -101,4 +135,23 @@ export class AgentOrchestrator {
     }
   }
 
+  private async saveAgentLogs(res: any) {
+    try {
+      await pool.query(`
+        INSERT INTO agent_execution_logs (file_id, user_id, agent_name, task_name, execution_path, decisions, confidence_score, status)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
+      `, [
+        res.fileId || null,
+        res.userId,
+        "AgentOrchestrator",
+        "DocumentOrchestrationAndAuditLog",
+        JSON.stringify(res.executionPath),
+        JSON.stringify(res.decisions),
+        res.confidenceScore,
+        res.status,
+      ]);
+    } catch (dbErr) {
+      console.error("[Orchestrator] Failed to log execution metrics:", dbErr);
+    }
+  }
 }

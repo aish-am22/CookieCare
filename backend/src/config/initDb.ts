@@ -110,10 +110,11 @@ export async function dbInit() {
     const hashedSeedPassword = await bcrypt.hash("MamuSecure2026!", 10);
     await client.query(`
       INSERT INTO users (id, email, name, password_hash, status, role, approved_at)
-      VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP);
+      VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+      ON CONFLICT (email) DO NOTHING;
     `, ["supreme_admin_id", "swarnaaishwarya17@gmail.com", "Supreme Admin", hashedSeedPassword, "APPROVED", "ADMIN"]);
 
-    console.log("Database initialized and supreme admin seeded.");
+    console.log("Database initialized and supreme admin seeded (if not exists).");
   } catch (err) {
     console.error("Database initialization failed:", err);
     throw err;
