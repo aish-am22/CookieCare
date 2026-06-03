@@ -1,65 +1,8 @@
 import { Request, Response } from "express";
-import crypto from "crypto";
 import { pool } from "../config/database.js";
-import { chunkAndIndexDocument } from "../RAG/ragService.js";
 import { jobQueue } from "../services/jobQueue.js";
 import { buildPdfBuffer, buildDocxBuffer } from "../services/exportService.js";
-import { RedlineProposal, Version, AuditLog } from "../types/index.js";
-
-const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || "a".repeat(32);
-const ALGORITHM = "aes-256-gcm";
-
-if (Buffer.from(ENCRYPTION_KEY).length !== 32) {
-  throw new Error("ENCRYPTION_KEY must be exactly 32 bytes for AES-256-GCM.");
-}
-
-const encryptData = (text: string) => {
-  if (!text) return "";
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv(ALGORITHM, Buffer.from(ENCRYPTION_KEY), iv);
-  let encrypted = cipher.update(text, "utf8", "hex");
-  encrypted += cipher.final("hex");
-  const authTag = cipher.getAuthTag().toString("hex");
-  return `LEXGCM_${iv.toString("hex")}:${authTag}:${encrypted}`;
-};
-
-const decryptData = (text: string) => {
-  if (!text) return "";
-
-  if (text.startsWith("LEXGCM_")) {
-    try {
-      const payload = text.replace("LEXGCM_", "");
-      const [ivHex, authTagHex, encryptedHex] = payload.split(":");
-
-      if (!ivHex || !authTagHex || !encryptedHex) {
-        return "[DECRYPTION_FORMAT_ERROR]";
-      }
-
-      const iv = Buffer.from(ivHex, "hex");
-      const authTag = Buffer.from(authTagHex, "hex");
-      const decipher = crypto.createDecipheriv(ALGORITHM, Buffer.from(ENCRYPTION_KEY), iv);
-
-      decipher.setAuthTag(authTag);
-      let decrypted = decipher.update(encryptedHex, "hex", "utf8");
-      decrypted += decipher.final("utf8");
-      return decrypted;
-    } catch (err) {
-      console.error("Decryption failed:", err);
-      return "[DECRYPTION_FAILURE]";
-    }
-  }
-
-  if (text.startsWith("LEXENC_")) {
-    try {
-      const rawBase64 = text.replace("LEXENC_", "");
-      return Buffer.from(rawBase64, "base64").toString("utf-8");
-    } catch (err) {
-      return "[LEGACY_DECRYPTION_ERROR]";
-    }
-  }
-
-  return text;
-};
+import { encryptData, decryptData } from "../utils/crypto.js";
 
 export const getDocuments = async (req: Request, res: Response) => {
   const userId = req.user!.id;

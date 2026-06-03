@@ -1,6 +1,8 @@
 import { Request, Response } from "express";
 import bcrypt from "bcrypt";
+import jwt from "jsonwebtoken";
 import { pool } from "../config/database.js";
+import { config } from "../config/index.js";
 
 export const register = async (req: Request, res: Response) => {
   const { email, password, name } = req.body;
@@ -53,8 +55,14 @@ export const login = async (req: Request, res: Response) => {
         if (user.status !== 'APPROVED') {
           return res.status(403).json({ error: "Your account is awaiting admin approval." });
         }
+        const token = jwt.sign(
+          { id: user.id, email: user.email },
+          config.jwtSecret,
+          { expiresIn: "24h" }
+        );
+
         return res.json({
-          token: user.id,
+          token: token,
           user: {
             id: user.id,
             email: user.email,

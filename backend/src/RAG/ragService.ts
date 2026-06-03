@@ -38,7 +38,8 @@ export async function chunkAndIndexDocument(fileId: string, content: string, use
     await client.query("DELETE FROM legal_document_chunks WHERE file_id = $1 AND user_id = $2;", [fileId, userId]);
     
     const cleanedContent = sanitizeText(content);
-    const chunks = [cleanedContent];
+    // Use a more robust chunking strategy here as well
+    const chunks = splitIntoChunks(cleanedContent);
 
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
@@ -59,6 +60,38 @@ export async function chunkAndIndexDocument(fileId: string, content: string, use
   } finally {
     if (client) client.release();
   }
+}
+
+function splitIntoChunks(text: string, maxChars = 1000, overlap = 200): string[] {
+  if (!text) return [];
+  const paragraphs = text.split(/\n\s*\n/);
+  const chunks: string[] = [];
+  let currentChunk = "";
+
+  for (const para of paragraphs) {
+    const trimmed = para.trim();
+    if (!trimmed) continue;
+
+    if ((currentChunk + "\n\n" + trimmed).length <= maxChars) {
+      currentChunk = currentChunk ? currentChunk + "\n\n" + trimmed : trimmed;
+    } else {
+      if (currentChunk) chunks.push(currentChunk);
+      if (trimmed.length > maxChars) {
+        let index = 0;
+        while (index < trimmed.length) {
+          const start = index;
+          const end = Math.min(start + maxChars, trimmed.length);
+          chunks.push(trimmed.substring(start, end));
+          index += (maxChars - overlap);
+        }
+        currentChunk = "";
+      } else {
+        currentChunk = trimmed;
+      }
+    }
+  }
+  if (currentChunk) chunks.push(currentChunk);
+  return chunks;
 }
 
 export async function semanticSearch(userId: string, query: string, limit = 5): Promise<string[]> {

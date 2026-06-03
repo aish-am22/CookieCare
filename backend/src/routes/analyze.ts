@@ -5,13 +5,23 @@ import { AgentOrchestrator } from "../agents/legalAgent.js";
 const router = Router();
 const orchestrator = new AgentOrchestrator();
 
+router.post("/remediate", authenticateToken, async (req: Request, res: Response) => {
+  const { clauseText, riskType } = req.body;
+  try {
+    const result = await orchestrator.remediate(clauseText, riskType);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: "Remediation failed" });
+  }
+});
+
 router.post("/interact", authenticateToken, async (req: Request, res: Response) => {
-  const { folder_ids, prompt, documentMode, answerStyle, history } = req.body;
+  const { folderIds, prompt, documentMode, answerStyle, history } = req.body;
   const userId = req.user!.id;
 
   try {
     const result = await orchestrator.interactAnalyze(
-      folder_ids || [],
+      folderIds,
       prompt,
       userId,
       documentMode,
@@ -20,13 +30,9 @@ router.post("/interact", authenticateToken, async (req: Request, res: Response) 
     );
     res.json(result);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    console.error("Interact analyze error:", err);
+    res.status(500).json({ error: "Internal server error" });
   }
-});
-
-router.post("/remediate", authenticateToken, async (req: Request, res: Response) => {
-  // Remediation logic using orchestrator...
-  res.json({ success: true });
 });
 
 export default router;
