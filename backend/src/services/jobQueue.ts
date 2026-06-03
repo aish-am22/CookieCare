@@ -26,14 +26,12 @@ class JobQueue {
     job.status = "processing";
     try {
       if (job.type === "file_processing") {
-        const { fileTitle, fileBufferBase64, mimeType, folder_id, creatorEmail } = job.data;
-        const content = Buffer.from(fileBufferBase64, "base64").toString("utf-8");
-        const fileId = "doc_" + Math.random().toString(36).substr(2, 9);
+        const { fileId, fileBufferBase64 } = job.data;
+        const content = Buffer.from(fileBufferBase64, "base64").toString("utf-8").replace(/\0/g, "");
 
         await pool.query(
-          `INSERT INTO files (id, title, type, content, creator_id, creator_email, mime_type, folder_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-          [fileId, fileTitle, "upload", content, job.userId, creatorEmail || "user@example.com", mimeType, folder_id]
+          `UPDATE files SET content = $1 WHERE id = $2`,
+          [content, fileId]
         );
 
         await chunkAndIndexDocument(fileId, content, job.userId);
