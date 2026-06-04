@@ -58,37 +58,53 @@ export async function chunkAndIndexDocument(fileId: string, content: string, use
   }
 }
 
-function splitIntoClauseAwareChunks(text: string, maxChars = 1500): string[] {
+function splitIntoClauseAwareChunks(text: string, maxChars = 2000): string[] {
   if (!text) return [];
-  const clauseRegex = /\n\s*(?:ARTICLE|SECTION|CLAUSE)\s+[\d\.]+|^\s*(?:ARTICLE|SECTION|CLAUSE)\s+[\d\.]+|\n\s*[\d]+\.\s+[A-Z\s]{3,}/i;
-  const sections = text.split(clauseRegex);
+
+  // Improved regex to identify legal boundaries without losing the headers
+  const clauseBoundaries = [
+    /\n\s*(?=ARTICLE\s+[\d\.]+)/i,
+    /\n\s*(?=SECTION\s+[\d\.]+)/i,
+    /\n\s*(?=CLAUSE\s+[\d\.]+)/i,
+    /\n\s*(?=\d+\.\s+[A-Z\s]{3,})/i
+  ];
+
+  let sections = [text];
+  for (const regex of clauseBoundaries) {
+    sections = sections.flatMap(s => s.split(regex));
+  }
+
   const chunks: string[] = [];
   let currentChunk = "";
+
   for (const section of sections) {
     const trimmed = section.trim();
     if (!trimmed) continue;
-    if (currentChunk.length + trimmed.length <= maxChars) {
+
+    if ((currentChunk.length + trimmed.length) <= maxChars) {
       currentChunk += (currentChunk ? "\n\n" : "") + trimmed;
     } else {
       if (currentChunk) chunks.push(currentChunk);
+
       if (trimmed.length > maxChars) {
-        const subParagraphs = trimmed.split(/\n\s*\n/);
-        let subChunk = "";
-        for (const para of subParagraphs) {
-          if (subChunk.length + para.length <= maxChars) {
-            subChunk += (subChunk ? "\n\n" : "") + para;
+        // Fallback: split by double newline if a single clause is too big
+        const paragraphs = trimmed.split(/\n\s*\n/);
+        let tempChunk = "";
+        for (const para of paragraphs) {
+          if ((tempChunk.length + para.length) <= maxChars) {
+            tempChunk += (tempChunk ? "\n\n" : "") + para;
           } else {
-            if (subChunk) chunks.push(subChunk);
-            subChunk = para;
+            if (tempChunk) chunks.push(tempChunk);
+            tempChunk = para;
           }
         }
-        if (subChunk) currentChunk = subChunk;
-        else currentChunk = "";
+        currentChunk = tempChunk;
       } else {
         currentChunk = trimmed;
       }
     }
   }
+
   if (currentChunk) chunks.push(currentChunk);
   return chunks;
 }
@@ -115,29 +131,30 @@ export async function hybridSearch(userId: string, query: string, limit = 5): Pr
 
     const vectorString = `[${vector.join(",")}]`;
 
+    // Reciprocal Rank Fusion (simplified) or Weighted combination
     const { rows } = await client.query(`
       WITH vector_results AS (
-        SELECT id, content, (embedding <=> $1::vector) AS distance
+        SELECT id, content, 1.0 / (1.0 + (embedding <=> $1::vector)) AS score
         FROM legal_document_chunks
         WHERE user_id = $2 AND embedding IS NOT NULL
-        ORDER BY distance ASC
-        LIMIT $3
+        ORDER BY score DESC
+        LIMIT 20
       ),
       keyword_results AS (
-        SELECT id, content, 0 AS distance
+        SELECT id, content, 1.0 AS score
         FROM legal_document_chunks
         WHERE user_id = $2 AND content ILIKE ANY($4)
-        LIMIT $3
+        LIMIT 20
       )
       SELECT content FROM (
-        SELECT * FROM vector_results
+        SELECT id, content, score FROM vector_results
         UNION ALL
-        SELECT * FROM keyword_results
+        SELECT id, content, score FROM keyword_results
       ) combined
-      GROUP BY content, distance
-      ORDER BY distance ASC
+      GROUP BY id, content
+      ORDER BY SUM(score) DESC
       LIMIT $3;
-    `, [vectorString, userId, limit, sanitizedQuery.split(/\s+/).map(k => `%${k}%`)]);
+    `, [vectorString, userId, limit, sanitizedQuery.split(/\s+/).filter(k => k.length >= 2).map(k => `%${k}%`)]);
 
     return rows.map((r) => r.content);
   } catch (err) {

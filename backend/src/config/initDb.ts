@@ -94,6 +94,22 @@ export async function dbInit() {
     `);
 
     await client.query(`
+      CREATE TABLE IF NOT EXISTS jobs (
+        id VARCHAR(255) PRIMARY KEY,
+        user_id VARCHAR(255) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        type VARCHAR(50) NOT NULL,
+        status VARCHAR(50) NOT NULL DEFAULT 'queued',
+        progress INTEGER DEFAULT 0,
+        message TEXT,
+        payload JSONB DEFAULT '{}'::jsonb,
+        result JSONB,
+        error TEXT,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        completed_at TIMESTAMP WITH TIME ZONE
+      );
+    `);
+
+    await client.query(`
       CREATE TABLE IF NOT EXISTS library_items (
         id VARCHAR(255) PRIMARY KEY,
         user_id VARCHAR(255) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
