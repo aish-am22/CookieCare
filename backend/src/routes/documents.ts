@@ -12,4 +12,9 @@ router.post("/", authenticateToken, docController.createDocument);
 router.post("/upload", authenticateToken, upload.single("file"), docController.uploadDocument);
 router.post("/export", authenticateToken, docController.exportDocument);
 
+// Redlines
+router.post("/:id/redline", authenticateToken, docController.createRedline);
+router.post("/:id/redline/:redlineId/accept", authenticateToken, docController.acceptRedline);
+router.post("/:id/redline/:redlineId/reject", authenticateToken, docController.rejectRedline);
+
 export default router;

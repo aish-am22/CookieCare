@@ -25,7 +25,7 @@ export default function AdminPanel({ authToken }: AdminPanelProps) {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(apiUrl("/api/admin/pending-users"), {
+      const res = await fetch(apiUrl("/api/admin/users"), {
         headers: {
           "Authorization": `Bearer ${authToken}`
         }
@@ -47,7 +47,7 @@ export default function AdminPanel({ authToken }: AdminPanelProps) {
   const handleApprove = async (userId: string) => {
     setApprovingId(userId);
     try {
-      const res = await fetch(apiUrl("/api/admin/users/approve"), {
+      const res = await fetch(apiUrl("/api/admin/users/update"), {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",

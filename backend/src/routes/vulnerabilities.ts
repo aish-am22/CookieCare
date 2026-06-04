@@ -1,6 +1,6 @@
 import { Router, Request, Response } from "express";
 import { authenticateToken } from "../middleware/auth.js";
-import { jobQueue } from "../services/jobQueue.js";
+import { addJobToQueue } from "../services/jobQueue.js";
 
 const router = Router();
 
@@ -8,11 +8,7 @@ router.post("/scan-cookie", authenticateToken, async (req: Request, res: Respons
   try {
     const { url, scanDepth } = req.body;
   
-    const job = await jobQueue.add("privacy_scanning", {
-      type: "privacy_scanning",
-      userId: req.user!.id,
-      payload: { url, scanDepth }
-    });
+    const job = await addJobToQueue(req.user!.id, "privacy_scanning", { url, scanDepth });
     
     res.status(202).json({ success: true, job_id: job.id });
   } catch (error) {
@@ -25,11 +21,7 @@ router.post("/scan-vulnerability", authenticateToken, async (req: Request, res: 
   try {
     const { url } = req.body;
   
-    const job = await jobQueue.add("vulnerability_scanning", {
-      type: "vulnerability_scanning",
-      userId: req.user!.id,
-      payload: { url }
-    });
+    const job = await addJobToQueue(req.user!.id, "vulnerability_scanning", { url });
     
     res.status(202).json({ success: true, job_id: job.id });
   } catch (error) {

@@ -8,6 +8,7 @@ import jobRoutes from "./jobs.js";
 import analyzeRoutes from "./analyze.js";
 import draftingRoutes from "./drafting.js";
 import lawyerRoutes from "./lawyer.js";
+import negotiateRoutes from "./negotiate.js";
 import vulnerabilitiesRoutes from "./vulnerabilities.js";
 
 const router = Router();
@@ -21,6 +22,7 @@ router.use("/jobs", jobRoutes);
 router.use("/analyze", analyzeRoutes);
 router.use("/drafting", draftingRoutes);
 router.use("/lawyer", lawyerRoutes);
+router.use("/negotiate", negotiateRoutes);
 router.use("/vulnerabilities", vulnerabilitiesRoutes);
 
 export default router;

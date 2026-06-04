@@ -16,6 +16,55 @@ const redisConnection = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:
 export const jobQueueName = "cookiecare-jobs";
 export const jobQueue = new Queue(jobQueueName, { connection: redisConnection });
 
+/**
+ * Internal helper to update persistent job state
+ */
+async function updateJobState(jobId: string, updates: { status?: string; progress?: number; message?: string; result?: any; error?: string }) {
+  const { status, progress, message, result, error } = updates;
+  const fields = [];
+  const values = [];
+  let idx = 1;
+
+  if (status) { fields.push(`status = $${idx++}`); values.push(status); }
+  if (progress !== undefined) { fields.push(`progress = $${idx++}`); values.push(progress); }
+  if (message) { fields.push(`message = $${idx++}`); values.push(message); }
+  if (result !== undefined) { fields.push(`result = $${idx++}`); values.push(JSON.stringify(result)); }
+  if (error) { fields.push(`error = $${idx++}`); values.push(error); }
+
+  if (status === 'completed' || status === 'failed') {
+    fields.push(`completed_at = CURRENT_TIMESTAMP`);
+  }
+
+  if (fields.length === 0) return;
+
+  values.push(jobId);
+  await pool.query(`UPDATE jobs SET ${fields.join(", ")} WHERE id = $${idx}`, values);
+}
+
+/**
+ * Enhanced Job Adder that persists to PostgreSQL for cross-session tracking
+ */
+export async function addJobToQueue(userId: string, type: JobType, payload: any) {
+  const jobId = crypto.randomUUID();
+
+  // 1. Persist to DB first to avoid race conditions with workers
+  await pool.query(
+    `INSERT INTO jobs (id, user_id, type, status, progress, message, payload)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [jobId, userId, type, "queued", 0, "Job queued in BullMQ...", JSON.stringify(payload)]
+  );
+
+  // 2. Add to BullMQ with the same ID
+  const job = await jobQueue.add(type, {
+    type,
+    userId,
+    payload,
+    message: "Job queued in BullMQ..."
+  }, { jobId });
+
+  return job;
+}
+
 export type JobType =
   | "file_processing"
   | "document_analysis"
@@ -124,6 +173,12 @@ export const jobRegistry = new BackgroundJobRegistry();
 const worker = new Worker(jobQueueName, async (job: BullJob) => {
   const { type, userId, payload } = job.data;
 
+  await updateJobState(job.id!, {
+    status: 'processing',
+    progress: 5,
+    message: "Acquiring secure execution container..."
+  });
+
   await job.updateProgress(5);
   job.data.message = "Acquiring secure execution container...";
   jobRegistry.broadcast(userId, await jobRegistry.transformBullJob(job));
@@ -147,12 +202,23 @@ const worker = new Worker(jobQueueName, async (job: BullJob) => {
   }
 }, { connection: redisConnection, concurrency: 3 });
 
-worker.on("completed", async (job) => {
-  jobRegistry.broadcast(job.data.userId, await jobRegistry.transformBullJob(job));
+worker.on("completed", async (job: BullJob) => {
+  if (job) {
+    await updateJobState(job.id!, {
+      status: 'completed',
+      progress: 100,
+      result: job.returnvalue
+    });
+    jobRegistry.broadcast(job.data.userId, await jobRegistry.transformBullJob(job));
+  }
 });
 
-worker.on("failed", async (job, err) => {
+worker.on("failed", async (job: BullJob | undefined, err: Error) => {
   if (job) {
+    await updateJobState(job.id!, {
+      status: 'failed',
+      error: err.message
+    });
     jobRegistry.broadcast(job.data.userId, await jobRegistry.transformBullJob(job));
   }
 });
@@ -161,8 +227,10 @@ async function executeFileProcessing(job: BullJob): Promise<any> {
   const { userId, payload } = job.data;
   const { fileId, fileBufferBase64, mimeType } = payload;
 
+  const msg = "Extracting text from document...";
+  await updateJobState(job.id!, { progress: 15, message: msg });
   await job.updateProgress(15);
-  job.data.message = "Extracting text from document...";
+  job.data.message = msg;
   jobRegistry.broadcast(userId, await jobRegistry.transformBullJob(job));
 
   const buffer = Buffer.from(fileBufferBase64, "base64");
@@ -183,8 +251,10 @@ async function executeFileProcessing(job: BullJob): Promise<any> {
   content = content.replace(/\0/g, "");
   const encryptedContent = encryptData(content);
 
+  const msg2 = "Updating database and indexing for search...";
+  await updateJobState(job.id!, { progress: 50, message: msg2 });
   await job.updateProgress(50);
-  job.data.message = "Updating database and indexing for search...";
+  job.data.message = msg2;
   jobRegistry.broadcast(userId, await jobRegistry.transformBullJob(job));
 
   const result = await pool.query(
@@ -204,36 +274,52 @@ async function executeFileProcessing(job: BullJob): Promise<any> {
 async function executeDocumentAnalysis(job: BullJob): Promise<any> {
   const { userId, payload } = job.data;
   const { documentId, content } = payload;
+
+  const msg = "AI agents performing legal audit...";
+  await updateJobState(job.id!, { progress: 30, message: msg });
   await job.updateProgress(30);
-  job.data.message = "AI agents performing legal audit...";
+  job.data.message = msg;
   jobRegistry.broadcast(userId, await jobRegistry.transformBullJob(job));
 
   const result = await jobRegistry.orchestrator.runAnalysis(documentId, content, userId);
+
+  const msg2 = "Analysis complete.";
+  await updateJobState(job.id!, { progress: 100, message: msg2 });
   await job.updateProgress(100);
-  job.data.message = "Analysis complete.";
+  job.data.message = msg2;
   return result;
 }
 
 async function executePrivacyScanning(job: BullJob): Promise<any> {
   const { userId, payload } = job.data;
+  const msg = "Scanning website for privacy compliance...";
+  await updateJobState(job.id!, { progress: 20, message: msg });
   await job.updateProgress(20);
-  job.data.message = "Scanning website for privacy compliance...";
+  job.data.message = msg;
   jobRegistry.broadcast(userId, await jobRegistry.transformBullJob(job));
 
   const result = await jobRegistry.scanner.scanCookie(payload.url, userId, payload.scanDepth);
+
+  const msg2 = "Privacy scan complete.";
+  await updateJobState(job.id!, { progress: 100, message: msg2 });
   await job.updateProgress(100);
-  job.data.message = "Privacy scan complete.";
+  job.data.message = msg2;
   return result;
 }
 
 async function executeVulnerabilityScanning(job: BullJob): Promise<any> {
   const { userId, payload } = job.data;
+  const msg = "Performing vulnerability assessment...";
+  await updateJobState(job.id!, { progress: 20, message: msg });
   await job.updateProgress(20);
-  job.data.message = "Performing vulnerability assessment...";
+  job.data.message = msg;
   jobRegistry.broadcast(userId, await jobRegistry.transformBullJob(job));
 
   const result = await jobRegistry.scanner.scanVulnerability(payload.url, userId);
+
+  const msg2 = "Vulnerability scan complete.";
+  await updateJobState(job.id!, { progress: 100, message: msg2 });
   await job.updateProgress(100);
-  job.data.message = "Vulnerability scan complete.";
+  job.data.message = msg2;
   return result;
 }

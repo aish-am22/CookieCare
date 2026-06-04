@@ -1,6 +1,6 @@
 import { Request, Response } from "express";
 import { pool } from "../config/database.js";
-import { jobQueue } from "../services/jobQueue.js";
+import { addJobToQueue } from "../services/jobQueue.js";
 import { buildPdfBuffer, buildDocxBuffer } from "../services/exportService.js";
 import { encryptData, decryptData } from "../utils/crypto.js";
 import crypto from "crypto";
@@ -100,17 +100,13 @@ export const uploadDocument = async (req: Request, res: Response) => {
       [fileId, fileTitle, "upload", "", req.user!.id, req.user!.email, file.mimetype, folder_id || null]
     );
 
-    const job = await jobQueue.add("file_processing", {
-      type: "file_processing",
-      userId: req.user!.id,
-      payload: {
-        fileId,
-        fileTitle,
-        fileBufferBase64: file.buffer.toString("base64"),
-        mimeType: file.mimetype,
-        folder_id: folder_id || null,
-        creatorEmail: req.user!.email
-      }
+    const job = await addJobToQueue(req.user!.id, "file_processing", {
+      fileId,
+      fileTitle,
+      fileBufferBase64: file.buffer.toString("base64"),
+      mimeType: file.mimetype,
+      folder_id: folder_id || null,
+      creatorEmail: req.user!.email
     });
 
     res.status(202).json({ success: true, job_id: job.id, file_id: fileId });

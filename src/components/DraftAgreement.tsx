@@ -404,7 +404,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
       formData.append("isTemplate", "true");
       formData.append("templateType", "Template");
 
-      const res = await fetch("/api/documents/upload", {
+      const res = await fetch(apiUrl("/api/documents/upload"), {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${authToken}`
@@ -607,7 +607,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
   const handleExportDoc = async () => {
     try {
       const exportTitle = selectedDoc?.title || selectedTemplateName || "CookieCare Draft";
-      const res = await fetch("/api/documents/export", {
+      const res = await fetch(apiUrl("/api/documents/export"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -852,7 +852,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
 
       // Save content
       const updatedDocId = data.id;
-      const resUpdate = await fetch(`/api/documents/${updatedDocId}`, {
+      const resUpdate = await fetch(apiUrl(`/api/documents/${updatedDocId}`), {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
@@ -904,7 +904,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
     setSavingMsg("Encrypting and saving on clouds...");
 
     try {
-      const res = await fetch(`/api/documents/${selectedDoc.id}`, {
+      const res = await fetch(apiUrl(`/api/documents/${selectedDoc.id}`), {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
@@ -931,7 +931,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
     if (!confirm(`Are you sure you want to delete "${selectedDoc.title}"?`)) return;
     
     try {
-      const res = await fetch(`/api/documents/${selectedDoc.id}`, {
+      const res = await fetch(apiUrl(`/api/documents/${selectedDoc.id}`), {
         method: "DELETE",
         headers: { "Authorization": `Bearer ${authToken}` }
       });
@@ -948,7 +948,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
   const handleShare = async () => {
     if (!selectedDoc || !shareEmail.trim()) return;
     try {
-      const res = await fetch(`/api/documents/${selectedDoc.id}/share`, {
+      const res = await fetch(apiUrl(`/api/documents/${selectedDoc.id}/share`), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -970,7 +970,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
   const handleRequestSignature = async () => {
     if (!selectedDoc || !requestSignEmail.trim()) return;
     try {
-      const res = await fetch(`/api/documents/${selectedDoc.id}/request-signature`, {
+      const res = await fetch(apiUrl(`/api/documents/${selectedDoc.id}/request-signature`), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -993,7 +993,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
     e.preventDefault();
     if (!selectedDoc || !signerName.trim()) return;
     try {
-      const res = await fetch(`/api/documents/${selectedDoc.id}/sign`, {
+      const res = await fetch(apiUrl(`/api/documents/${selectedDoc.id}/sign`), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1005,7 +1005,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
       if (!res.ok) throw new Error(data.error);
 
       setSignerName("");
-      const refreshedDocRes = await fetch(`/api/documents/${selectedDoc.id}`, {
+      const refreshedDocRes = await fetch(apiUrl(`/api/documents/${selectedDoc.id}`), {
         headers: { "Authorization": `Bearer ${authToken}` }
       });
       const refreshedDoc = await refreshedDocRes.json();
@@ -1030,7 +1030,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
     if (!confirm("Are you sure you want to apply cryptographic locking over this document? This seals all arrays as read-only forever.")) return;
     
     try {
-      const res = await fetch(`/api/documents/${selectedDoc.id}/sign`, {
+      const res = await fetch(apiUrl(`/api/documents/${selectedDoc.id}/sign`), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1040,7 +1040,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
       });
       if (!res.ok) throw new Error("Could not register local locking execution.");
       
-      const refreshedDocRes = await fetch(`/api/documents/${selectedDoc.id}`, {
+      const refreshedDocRes = await fetch(apiUrl(`/api/documents/${selectedDoc.id}`), {
         headers: { "Authorization": `Bearer ${authToken}` }
       });
       const refreshedDoc = await refreshedDocRes.json();
