@@ -3,6 +3,7 @@ import { pool } from "../config/database.js";
 import { jobQueue } from "../services/jobQueue.js";
 import { buildPdfBuffer, buildDocxBuffer } from "../services/exportService.js";
 import { encryptData, decryptData } from "../utils/crypto.js";
+import crypto from "crypto";
 
 export const getDocuments = async (req: Request, res: Response) => {
   const userId = req.user!.id;
@@ -69,7 +70,7 @@ export const createDocument = async (req: Request, res: Response) => {
   const userId = req.user!.id;
   const email = req.user!.email;
 
-  const id = "doc_" + Math.random().toString(36).substr(2, 9);
+  const id = "doc_" + crypto.randomUUID();
   const encryptedContent = encryptData(content || "");
 
   try {
@@ -89,7 +90,7 @@ export const uploadDocument = async (req: Request, res: Response) => {
   if (!file) return res.status(400).json({ error: "No file uploaded" });
 
   const { title, folder_id } = req.body;
-  const fileId = "doc_" + Math.random().toString(36).substr(2, 9);
+  const fileId = "doc_" + crypto.randomUUID();
   const fileTitle = title || file.originalname;
 
   try {
@@ -99,19 +100,68 @@ export const uploadDocument = async (req: Request, res: Response) => {
       [fileId, fileTitle, "upload", "", req.user!.id, req.user!.email, file.mimetype, folder_id || null]
     );
 
-    const job = jobQueue.enqueue(req.user!.id, "file_processing", {
-      fileId,
-      fileTitle,
-      fileBufferBase64: file.buffer.toString("base64"),
-      mimeType: file.mimetype,
-      folder_id: folder_id || null,
-      creatorEmail: req.user!.email
+    const job = await jobQueue.add("file_processing", {
+      type: "file_processing",
+      userId: req.user!.id,
+      payload: {
+        fileId,
+        fileTitle,
+        fileBufferBase64: file.buffer.toString("base64"),
+        mimeType: file.mimetype,
+        folder_id: folder_id || null,
+        creatorEmail: req.user!.email
+      }
     });
 
     res.status(202).json({ success: true, job_id: job.id, file_id: fileId });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
+};
+
+export const createRedline = async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { originalText, proposedText, comment } = req.body;
+  try {
+    const { rows } = await pool.query("SELECT redlines FROM files WHERE id = $1", [id]);
+    if (rows.length === 0) return res.status(404).json({ error: "Document not found" });
+    const redlines = rows[0].redlines || [];
+    const newRedline = { id: crypto.randomUUID(), originalText, proposedText, comment, proposedByEmail: req.user!.email, proposedAt: new Date().toISOString(), status: "pending" };
+    redlines.push(newRedline);
+    await pool.query("UPDATE files SET redlines = $1 WHERE id = $2", [JSON.stringify(redlines), id]);
+    res.status(201).json(newRedline);
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
+};
+
+export const acceptRedline = async (req: Request, res: Response) => {
+  const { id, redlineId } = req.params;
+  try {
+    const { rows } = await pool.query("SELECT * FROM files WHERE id = $1", [id]);
+    if (rows.length === 0) return res.status(404).json({ error: "Document not found" });
+    const doc = rows[0];
+    const redlines = doc.redlines || [];
+    const index = redlines.findIndex((r: any) => r.id === redlineId);
+    if (index === -1) return res.status(404).json({ error: "Redline not found" });
+    const currentContent = decryptData(doc.content);
+    const newContent = currentContent.replace(redlines[index].originalText, redlines[index].proposedText);
+    redlines[index].status = "accepted";
+    await pool.query("UPDATE files SET content = $1, redlines = $2 WHERE id = $3", [encryptData(newContent), JSON.stringify(redlines), id]);
+    res.json({ success: true });
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
+};
+
+export const rejectRedline = async (req: Request, res: Response) => {
+  const { id, redlineId } = req.params;
+  try {
+    const { rows } = await pool.query("SELECT redlines FROM files WHERE id = $1", [id]);
+    if (rows.length === 0) return res.status(404).json({ error: "Document not found" });
+    const redlines = rows[0].redlines || [];
+    const index = redlines.findIndex((r: any) => r.id === redlineId);
+    if (index === -1) return res.status(404).json({ error: "Redline not found" });
+    redlines[index].status = "rejected";
+    await pool.query("UPDATE files SET redlines = $1 WHERE id = $2", [JSON.stringify(redlines), id]);
+    res.json({ success: true });
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
 };
 
 export const exportDocument = async (req: Request, res: Response) => {

@@ -1,5 +1,5 @@
 import { pool } from "./database.js";
-import bcrypt from "bcrypt";
+import argon2 from "argon2";
 
 export async function dbInit() {
   const client = await pool.connect();
@@ -107,7 +107,7 @@ export async function dbInit() {
       );
     `);
 
-    const hashedSeedPassword = await bcrypt.hash("MamuSecure2026!", 10);
+    const hashedSeedPassword = await argon2.hash("MamuSecure2026!");
     await client.query(`
       INSERT INTO users (id, email, name, password_hash, status, role, approved_at)
       VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)

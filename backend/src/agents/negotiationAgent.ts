@@ -9,12 +9,13 @@ export class NegotiationAgent {
 Return JSON: { "proposedText": "...", "comment": "...", "sideBySide": { "original": "...", "proposed": "...", "differentialHtml": "..." } }`;
 
     try {
-      const result = await genAI.models.generateContent({
+      const model = (genAI as any).getGenerativeModel({
         model: "gemini-2.0-flash",
-        contents: [{ role: "user", parts: [{ text: `Clause: ${clauseText}\nRisk: ${riskType}` }] }],
-        config: { responseMimeType: "application/json", systemInstruction },
+        generationConfig: { responseMimeType: "application/json" },
+        systemInstruction
       });
-      return JSON.parse(result.text);
+      const result = await model.generateContent(`Clause: ${clauseText}\nRisk: ${riskType}`);
+      return JSON.parse(result.response.text());
     } catch (err) {
       return {
         proposedText: "Alternative clause text.",

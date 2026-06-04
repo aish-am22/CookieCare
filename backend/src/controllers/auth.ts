@@ -1,8 +1,9 @@
 import { Request, Response } from "express";
-import bcrypt from "bcrypt";
+import argon2 from "argon2";
 import jwt from "jsonwebtoken";
 import { pool } from "../config/database.js";
 import { config } from "../config/index.js";
+import crypto from "crypto";
 
 export const register = async (req: Request, res: Response) => {
   const { email, password, name } = req.body;
@@ -11,7 +12,7 @@ export const register = async (req: Request, res: Response) => {
   }
 
   const normalizedEmail = email.toLowerCase();
-  const newUserId = "user_" + Math.random().toString(36).substr(2, 9);
+  const newUserId = "user_" + crypto.randomUUID();
 
   try {
     const checkMail = await pool.query("SELECT id FROM users WHERE email = $1", [normalizedEmail]);
@@ -19,8 +20,7 @@ export const register = async (req: Request, res: Response) => {
       return res.status(400).json({ error: "Email already exists." });
     }
 
-    const saltRounds = 10;
-    const passwordHash = await bcrypt.hash(password, saltRounds);
+    const passwordHash = await argon2.hash(password);
 
     await pool.query(
       "INSERT INTO users (id, email, name, password_hash, status, role) VALUES ($1, $2, $3, $4, $5, $6)",
@@ -50,7 +50,7 @@ export const login = async (req: Request, res: Response) => {
 
     if (rows.length > 0) {
       const user = rows[0];
-      const isPasswordValid = await bcrypt.compare(password, user.password_hash);
+      const isPasswordValid = await argon2.verify(user.password_hash, password);
       if (isPasswordValid) {
         if (user.status !== 'APPROVED') {
           return res.status(403).json({ error: "Your account is awaiting admin approval." });

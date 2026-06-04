@@ -11,10 +11,7 @@ function sanitizeText(str: string): string {
 
 export async function getEmbedding(text: string): Promise<number[] | null> {
   try {
-    const result = await genAI.models.embedContent({
-      model: "gemini-embedding-2",
-      contents: text,
-    });
+    const result = await (genAI as any).getGenerativeModel({ model: "text-embedding-004" }).embedContent(text);
 
     if (result && (result as any).embedding?.values) {
       return (result as any).embedding.values;
@@ -38,8 +35,7 @@ export async function chunkAndIndexDocument(fileId: string, content: string, use
     await client.query("DELETE FROM legal_document_chunks WHERE file_id = $1 AND user_id = $2;", [fileId, userId]);
     
     const cleanedContent = sanitizeText(content);
-    // Use a more robust chunking strategy here as well
-    const chunks = splitIntoChunks(cleanedContent);
+    const chunks = splitIntoClauseAwareChunks(cleanedContent);
 
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
@@ -62,29 +58,32 @@ export async function chunkAndIndexDocument(fileId: string, content: string, use
   }
 }
 
-function splitIntoChunks(text: string, maxChars = 1000, overlap = 200): string[] {
+function splitIntoClauseAwareChunks(text: string, maxChars = 1500): string[] {
   if (!text) return [];
-  const paragraphs = text.split(/\n\s*\n/);
+  const clauseRegex = /\n\s*(?:ARTICLE|SECTION|CLAUSE)\s+[\d\.]+|^\s*(?:ARTICLE|SECTION|CLAUSE)\s+[\d\.]+|\n\s*[\d]+\.\s+[A-Z\s]{3,}/i;
+  const sections = text.split(clauseRegex);
   const chunks: string[] = [];
   let currentChunk = "";
-
-  for (const para of paragraphs) {
-    const trimmed = para.trim();
+  for (const section of sections) {
+    const trimmed = section.trim();
     if (!trimmed) continue;
-
-    if ((currentChunk + "\n\n" + trimmed).length <= maxChars) {
-      currentChunk = currentChunk ? currentChunk + "\n\n" + trimmed : trimmed;
+    if (currentChunk.length + trimmed.length <= maxChars) {
+      currentChunk += (currentChunk ? "\n\n" : "") + trimmed;
     } else {
       if (currentChunk) chunks.push(currentChunk);
       if (trimmed.length > maxChars) {
-        let index = 0;
-        while (index < trimmed.length) {
-          const start = index;
-          const end = Math.min(start + maxChars, trimmed.length);
-          chunks.push(trimmed.substring(start, end));
-          index += (maxChars - overlap);
+        const subParagraphs = trimmed.split(/\n\s*\n/);
+        let subChunk = "";
+        for (const para of subParagraphs) {
+          if (subChunk.length + para.length <= maxChars) {
+            subChunk += (subChunk ? "\n\n" : "") + para;
+          } else {
+            if (subChunk) chunks.push(subChunk);
+            subChunk = para;
+          }
         }
-        currentChunk = "";
+        if (subChunk) currentChunk = subChunk;
+        else currentChunk = "";
       } else {
         currentChunk = trimmed;
       }
@@ -94,36 +93,61 @@ function splitIntoChunks(text: string, maxChars = 1000, overlap = 200): string[]
   return chunks;
 }
 
-export async function semanticSearch(userId: string, query: string, limit = 5): Promise<string[]> {
+/**
+ * Hybrid Search: Combines Vector Similarity with Keyword-based search.
+ */
+export async function hybridSearch(userId: string, query: string, limit = 5): Promise<string[]> {
   const sanitizedQuery = sanitizeText(query);
   const vector = await getEmbedding(sanitizedQuery);
-  
+
   let client;
   try {
     client = await pool.connect();
+
     if (!vector) {
       const { rows } = await client.query(`
         SELECT content FROM legal_document_chunks
-        WHERE user_id = $1
-        LIMIT $2;
-      `, [userId, limit]);
+        WHERE user_id = $1 AND content ILIKE $2
+        LIMIT $3;
+      `, [userId, `%${sanitizedQuery}%`, limit]);
       return rows.map((r) => r.content);
     }
 
     const vectorString = `[${vector.join(",")}]`;
+
     const { rows } = await client.query(`
-      SELECT content, (embedding <=> $1::vector) AS distance
-      FROM legal_document_chunks
-      WHERE user_id = $2 AND embedding IS NOT NULL
+      WITH vector_results AS (
+        SELECT id, content, (embedding <=> $1::vector) AS distance
+        FROM legal_document_chunks
+        WHERE user_id = $2 AND embedding IS NOT NULL
+        ORDER BY distance ASC
+        LIMIT $3
+      ),
+      keyword_results AS (
+        SELECT id, content, 0 AS distance
+        FROM legal_document_chunks
+        WHERE user_id = $2 AND content ILIKE ANY($4)
+        LIMIT $3
+      )
+      SELECT content FROM (
+        SELECT * FROM vector_results
+        UNION ALL
+        SELECT * FROM keyword_results
+      ) combined
+      GROUP BY content, distance
       ORDER BY distance ASC
       LIMIT $3;
-    `, [vectorString, userId, limit]);
+    `, [vectorString, userId, limit, sanitizedQuery.split(/\s+/).map(k => `%${k}%`)]);
 
     return rows.map((r) => r.content);
   } catch (err) {
-    console.error("semanticSearch failed:", err);
+    console.error("hybridSearch failed:", err);
     return [];
   } finally {
     if (client) client.release();
   }
+}
+
+export async function semanticSearch(userId: string, query: string, limit = 5): Promise<string[]> {
+  return hybridSearch(userId, query, limit);
 }
