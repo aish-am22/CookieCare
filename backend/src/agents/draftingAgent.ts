@@ -17,11 +17,8 @@ Provide a high-fidelity, professional legal draft.
 IMPORTANT: Return your response in clean, well-structured Markdown format. Use headers, bullet points, and bold text for readability.`;
 
     try {
-      const response = await genAI.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: prompt,
-      });
-      return response.text || "Drafting failed.";
+      const response = await (genAI as any).getGenerativeModel({ model: "gemini-2.0-flash" }).generateContent(prompt);
+      return response.response.text() || "Drafting failed.";
     } catch (err) {
       console.error("DraftingAgent error:", err);
       throw err;
