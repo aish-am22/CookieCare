@@ -59,7 +59,7 @@ import { LegalDocument, Version } from "../types";
 // ==============================================================================
 const templateFolders = [
   {
-    name: "CookieCare Templates",
+    name: "PrivSecAI Templates",
     count: 10,
     items: [
       "Mutual Non-Disclosure Agreement",
@@ -93,7 +93,7 @@ const templateFolders = [
 
 const clauseCategories = [
   {
-    name: "CookieCare Clause Library",
+    name: "PrivSecAI Clause Library",
     count: 6,
     items: [
       "Non-Solicitation of Staff Covenants",
@@ -280,7 +280,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
   const [customClauseText, setCustomClauseText] = useState("");
   
   // Basic Mode Form Inputs
-  const [basicPartyA, setBasicPartyA] = useState("CookieCare Corporate Client");
+  const [basicPartyA, setBasicPartyA] = useState("PrivSecAI Corporate Client");
   const [basicPartyB, setBasicPartyB] = useState("Vendor Infrastructure Host");
   const [basicLaw, setBasicLaw] = useState("State of Delaware");
   const [basicLiability, setBasicLiability] = useState("USD $2,000,000 limit");
@@ -297,8 +297,8 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
   const [s4Open, setS4Open] = useState(false);
 
   // Expand states for folders inside Section 1 & Section 3
-  const [expandedFolder, setExpandedFolder] = useState<string | null>("CookieCare Templates");
-  const [expandedClauseCat, setExpandedClauseCat] = useState<string | null>("CookieCare Clause Library");
+  const [expandedFolder, setExpandedFolder] = useState<string | null>("PrivSecAI Templates");
+  const [expandedClauseCat, setExpandedClauseCat] = useState<string | null>("PrivSecAI Clause Library");
 
   // Search filter query
   const [searchTemplateQuery, setSearchTemplateQuery] = useState("");
@@ -316,12 +316,12 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
   const [uploadFileName, setUploadFileName] = useState("");
   const [isParsingTemplate, setIsParsingTemplate] = useState(false);
   const [advancedFields, setAdvancedFields] = useState<Array<{ id: string; name: string; defaultValue: string; description: string }>>([
-    { id: "party_a", name: "Party A Title", defaultValue: "CookieCare Corporate", description: "Disclosing Primary Entity" },
+    { id: "party_a", name: "Party A Title", defaultValue: "PrivSecAI Corporate", description: "Disclosing Primary Entity" },
     { id: "party_b", name: "Party B Title", defaultValue: "Vendor Tech Inc.", description: "Receiving technology Vendor" },
     { id: "jurisdiction", name: "Jurisdiction", defaultValue: "Delaware chancery", description: "Standard Governing Law" },
   ]);
   const [advancedFieldValues, setAdvancedFieldValues] = useState<Record<string, string>>({
-    party_a: "CookieCare Corporate",
+    party_a: "PrivSecAI Corporate",
     party_b: "Vendor Tech Inc.",
     jurisdiction: "Delaware chancery"
   });
@@ -599,14 +599,14 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
       );
     } else if (action === "signature-block") {
       insertTextAtCursor(
-        `\n\n[EXECUTED SIGNATURE SPECIFICATION]\nApproved legal representative: CookieCare Workspace\nCrypto Seal Identifier: STAMP_${Math.random().toString(36).substr(2, 6).toUpperCase()}_SECURE\nDate: ${new Date().toLocaleDateString()}\n`
+        `\n\n[EXECUTED SIGNATURE SPECIFICATION]\nApproved legal representative: PrivSecAI Workspace\nCrypto Seal Identifier: STAMP_${Math.random().toString(36).substr(2, 6).toUpperCase()}_SECURE\nDate: ${new Date().toLocaleDateString()}\n`
       );
     }
   };
 
   const handleExportDoc = async () => {
     try {
-      const exportTitle = selectedDoc?.title || selectedTemplateName || "CookieCare Draft";
+      const exportTitle = selectedDoc?.title || selectedTemplateName || "PrivSecAI Draft";
       const res = await fetch(apiUrl("/api/documents/export"), {
         method: "POST",
         headers: {
@@ -644,7 +644,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
 
   const handlePrintDoc = async () => {
     try {
-      const exportTitle = selectedDoc?.title || selectedTemplateName || "CookieCare Draft";
+      const exportTitle = selectedDoc?.title || selectedTemplateName || "PrivSecAI Draft";
       const res = await fetch("/api/documents/export", {
         method: "POST",
         headers: {
@@ -703,7 +703,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
     }
   };
 
-  const handleApplyRewrite = (type: string, param: string = "") => {
+  const handleApplyRewrite = async (type: string, param: string = "") => {
     if (!selectedTextRange) return;
     const originalText = editorContent.substring(selectedTextRange.start, selectedTextRange.end);
     if (!originalText) return;
@@ -713,34 +713,23 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
     setShowAskAiInput(false);
     pushUndoSnapshot(editorContent);
 
-    // Dynamic AI prompt simulation matching Screenshot 3 rewritten results!
-    setTimeout(() => {
-      let rewritten = originalText;
-      if (type === "tone") {
-        if (param === "Formal") {
-          rewritten = `[● STRICT CONFIDENTIALITY STATUTORY RULES]: The Participating entities undertake to retain all confidential trade data as strictly internal covenants and shall secure compliance under respective jurisdictional regulations.`;
-        } else if (param === "Professional") {
-          rewritten = `The parties contractually agree to protect all shared technology assets and ensure strict non-disclosure across corresponding subsidiary channels.`;
-        } else if (param === "Casual") {
-          rewritten = `We will make sure we keep all info confidential and won't leak any records or materials shared between us.`;
-        } else if (param === "Friendly") {
-          rewritten = `We are excited to build this alliance together, and will make sure all of your shared technology and designs are kept locked away safely and treated with top care.`;
-        } else {
-          rewritten = `This rewritten segment represents strict authorized parameters complying with legal guidelines.`;
-        }
-      } else if (type === "grammar") {
-        rewritten = originalText.replace(/favour/g, "favor").replace(/adgrest/g, "adjust").replace(/clumpsy/g, "clumsy") + " (Vetted for statutory consistency and spelling accuracy.)";
-      } else if (type === "extend") {
-        rewritten = originalText + ` Furthermore, the obligations specified herein shall be binding upon the heirs, successors, representatives, and approved assignees, enduring across any structural merger or corporate restructuring event.`;
-      } else if (type === "reduce") {
-        rewritten = `The Parties agrees to protect shared proprietary information from unapproved third-party dissemination.`;
-      } else if (type === "simplify") {
-        rewritten = `Simply put: both partners must protect each other's secret information and not share it anywhere.`;
-      } else if (type === "complete") {
-        rewritten = originalText + ` IN WITNESS WHEREOF, the duly credentialed delegates execute this covenants package on the statutory dates.`;
-      } else if (type === "ask") {
-        rewritten = `[AI Custom Instruction: ${param}] ${originalText} complies with specified instructions.`;
-      }
+    try {
+      const res = await fetch(apiUrl("/api/negotiate/compromise"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${authToken}`
+        },
+        body: JSON.stringify({
+          originalText,
+          riskExplanation: type === "ask" ? param : `Rewrite in ${param || type} tone.`,
+          userPrompt: type === "ask" ? param : undefined
+        })
+      });
+
+      if (!res.ok) throw new Error("AI refinement failed");
+      const data = await res.json();
+      const rewritten = data.result || originalText;
 
       const newContent = editorContent.substring(0, selectedTextRange.start) + rewritten + editorContent.substring(selectedTextRange.end);
       setEditorContent(newContent);
@@ -752,7 +741,11 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
         start: selectedTextRange.start,
         end: selectedTextRange.start + rewritten.length
       };
-    }, 1100);
+    } catch (err: any) {
+      console.error(err);
+      setIsAiRefiningText(false);
+      alert("AI Tone Refinement failed. Please try again.");
+    }
   };
 
   // START STREAMING ENGINE
@@ -839,7 +832,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
 
   const handleCreateAndSaveGeneratedDoc = async (title: string, content: string) => {
     try {
-      const res = await fetch("/api/documents", {
+      const res = await fetch(apiUrl("/api/documents"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -876,7 +869,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
     if (!newTitle.trim()) return;
 
     try {
-      const res = await fetch("/api/documents", {
+      const res = await fetch(apiUrl("/api/documents"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1421,7 +1414,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
 
                     {s1Open && (
                       <div className="p-6 space-y-4">
-                        <p className="text-xs text-gray-400">Choose from CookieCare Templates or your uploaded templates.</p>
+                        <p className="text-xs text-gray-400">Choose from PrivSecAI Templates or your uploaded templates.</p>
                         
                         <div className="flex space-x-2">
                           <div className="relative flex-1">

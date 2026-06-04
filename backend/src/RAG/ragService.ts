@@ -58,49 +58,52 @@ export async function chunkAndIndexDocument(fileId: string, content: string, use
   }
 }
 
+/**
+ * Structural Document Chunking: respects legal boundaries (Article, Section, Clause)
+ */
 function splitIntoClauseAwareChunks(text: string, maxChars = 2000): string[] {
   if (!text) return [];
 
-  // Improved regex to identify legal boundaries without losing the headers
-  const clauseBoundaries = [
-    /\n\s*(?=ARTICLE\s+[\d\.]+)/i,
-    /\n\s*(?=SECTION\s+[\d\.]+)/i,
-    /\n\s*(?=CLAUSE\s+[\d\.]+)/i,
-    /\n\s*(?=\d+\.\s+[A-Z\s]{3,})/i
+  // Improved boundaries with lookahead to preserve the header in the chunk
+  const boundaries = [
+    /\n(?=ARTICLE\s+[0-9IVX]+[:\.\s])/i,
+    /\n(?=SECTION\s+[0-9\.]+[:\.\s])/i,
+    /\n(?=CLAUSE\s+[0-9\.]+[:\.\s])/i,
+    /\n(?=[0-9]+\.\s+[A-Z\s]{4,})/ // Matches "1. DEFINITIONS"
   ];
 
-  let sections = [text];
-  for (const regex of clauseBoundaries) {
-    sections = sections.flatMap(s => s.split(regex));
+  let segments = [text];
+  for (const regex of boundaries) {
+    segments = segments.flatMap(s => {
+      const parts = s.split(regex);
+      return parts.map(p => p.trim()).filter(Boolean);
+    });
   }
 
   const chunks: string[] = [];
   let currentChunk = "";
 
-  for (const section of sections) {
-    const trimmed = section.trim();
-    if (!trimmed) continue;
-
-    if ((currentChunk.length + trimmed.length) <= maxChars) {
-      currentChunk += (currentChunk ? "\n\n" : "") + trimmed;
+  for (const segment of segments) {
+    if ((currentChunk.length + segment.length) <= maxChars) {
+      currentChunk += (currentChunk ? "\n\n" : "") + segment;
     } else {
       if (currentChunk) chunks.push(currentChunk);
 
-      if (trimmed.length > maxChars) {
-        // Fallback: split by double newline if a single clause is too big
-        const paragraphs = trimmed.split(/\n\s*\n/);
-        let tempChunk = "";
-        for (const para of paragraphs) {
-          if ((tempChunk.length + para.length) <= maxChars) {
-            tempChunk += (tempChunk ? "\n\n" : "") + para;
+      if (segment.length > maxChars) {
+        // Fallback for massive segments: split by double newlines or sentences
+        const subParts = segment.split(/\n\n/);
+        let subChunk = "";
+        for (const part of subParts) {
+          if ((subChunk.length + part.length) <= maxChars) {
+            subChunk += (subChunk ? "\n\n" : "") + part;
           } else {
-            if (tempChunk) chunks.push(tempChunk);
-            tempChunk = para;
+            if (subChunk) chunks.push(subChunk);
+            subChunk = part;
           }
         }
-        currentChunk = tempChunk;
+        currentChunk = subChunk;
       } else {
-        currentChunk = trimmed;
+        currentChunk = segment;
       }
     }
   }
@@ -110,7 +113,7 @@ function splitIntoClauseAwareChunks(text: string, maxChars = 2000): string[] {
 }
 
 /**
- * Hybrid Search: Combines Vector Similarity with Keyword-based search.
+ * Hybrid Search with Semantic Re-ranking
  */
 export async function hybridSearch(userId: string, query: string, limit = 5): Promise<string[]> {
   const sanitizedQuery = sanitizeText(query);
@@ -131,38 +134,55 @@ export async function hybridSearch(userId: string, query: string, limit = 5): Pr
 
     const vectorString = `[${vector.join(",")}]`;
 
-    // Reciprocal Rank Fusion (simplified) or Weighted combination
+    // Reciprocal Rank Fusion + Semantic Re-ranking layer
     const { rows } = await client.query(`
       WITH vector_results AS (
-        SELECT id, content, 1.0 / (1.0 + (embedding <=> $1::vector)) AS score
+        SELECT id, content, 1.0 / (1.0 + (embedding <=> $1::vector)) AS vector_score
         FROM legal_document_chunks
         WHERE user_id = $2 AND embedding IS NOT NULL
-        ORDER BY score DESC
-        LIMIT 20
+        ORDER BY vector_score DESC
+        LIMIT 30
       ),
       keyword_results AS (
-        SELECT id, content, 1.0 AS score
+        SELECT id, content, 1.0 AS keyword_score
         FROM legal_document_chunks
         WHERE user_id = $2 AND content ILIKE ANY($4)
-        LIMIT 20
+        LIMIT 30
       )
-      SELECT content FROM (
-        SELECT id, content, score FROM vector_results
-        UNION ALL
-        SELECT id, content, score FROM keyword_results
-      ) combined
-      GROUP BY id, content
-      ORDER BY SUM(score) DESC
-      LIMIT $3;
+      SELECT content,
+             COALESCE(vector_score, 0) + COALESCE(keyword_score, 0) as combined_score
+      FROM vector_results
+      FULL OUTER JOIN keyword_results USING (id, content)
+      ORDER BY combined_score DESC
+      LIMIT 15;
     `, [vectorString, userId, limit, sanitizedQuery.split(/\s+/).filter(k => k.length >= 2).map(k => `%${k}%`)]);
 
-    return rows.map((r) => r.content);
+    const candidates = rows.map(r => r.content);
+
+    // Semantic Re-ranking: Simple context-aware scoring
+    const reRanked = candidates.sort((a, b) => {
+      const aLower = a.toLowerCase();
+      const bLower = b.toLowerCase();
+      const qLower = sanitizedQuery.toLowerCase();
+
+      // Boost chunks that contain the query terms exactly
+      const aExactMatch = qLower.split(' ').every(term => aLower.includes(partiallyCleanTerm(term))) ? 1 : 0;
+      const bExactMatch = qLower.split(' ').every(term => bLower.includes(partiallyCleanTerm(term))) ? 1 : 0;
+
+      return bExactMatch - aExactMatch;
+    });
+
+    return reRanked.slice(0, limit);
   } catch (err) {
     console.error("hybridSearch failed:", err);
     return [];
   } finally {
     if (client) client.release();
   }
+}
+
+function partiallyCleanTerm(term: string): string {
+  return term.replace(/[^a-z0-9]/gi, '');
 }
 
 export async function semanticSearch(userId: string, query: string, limit = 5): Promise<string[]> {

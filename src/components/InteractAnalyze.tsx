@@ -312,7 +312,7 @@ export default function InteractAnalyze({
           "Authorization": `Bearer ${authToken}`
         },
         body: JSON.stringify({
-          folder_ids: activeSelectedFolders.map(f => f.id),
+          folderIds: activeSelectedFolders.map(f => f.id),
           prompt: customPromptText,
           documentMode,
           answerStyle,
@@ -365,7 +365,7 @@ export default function InteractAnalyze({
           "Authorization": `Bearer ${authToken}`
         },
         body: JSON.stringify({
-          folder_ids: activeSelectedFolders.map(f => f.id),
+          folderIds: activeSelectedFolders.map(f => f.id),
           prompt: userText,
           documentMode,
           answerStyle,

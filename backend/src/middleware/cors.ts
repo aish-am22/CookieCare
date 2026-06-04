@@ -1,5 +1,5 @@
 import cors from "cors";
-import { config } from "../config/index.js";
+import { config, isProduction } from "../config/index.js";
 
 const corsOrigins = new Set(
   [
@@ -15,6 +15,11 @@ const corsOrigins = new Set(
 
 export const corsMiddleware = cors({
   origin: (origin, callback) => {
+    // Dynamic origin allowance for development / Cloud Workstations
+    if (!isProduction) {
+      return callback(null, true);
+    }
+
     if (!origin || corsOrigins.has(origin) || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) ||
         /^https?:\/\/[a-z0-9-]+\.app\.github\.dev(:\d+)?$/i.test(origin) ||
         /^https?:\/\/[a-z0-9-]+\.github\.dev(:\d+)?$/i.test(origin) ||

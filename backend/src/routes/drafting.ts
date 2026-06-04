@@ -3,12 +3,13 @@ import { authenticateToken } from "../middleware/auth.js";
 import { AgentOrchestrator } from "../agents/legalAgent.js";
 import { GoogleGenAI } from "@google/genai";
 import { config } from "../config/index.js";
+import { aiLimiter } from "../middleware/rateLimiter.js";
 
 const router = Router();
 const orchestrator = new AgentOrchestrator();
 const genAI = new GoogleGenAI({ apiKey: config.geminiApiKey || "dummy" });
 
-router.post("/generate", authenticateToken, async (req: Request, res: Response) => {
+router.post("/generate", authenticateToken, aiLimiter, async (req: Request, res: Response) => {
   const { draftInput, instructions, detailLevel, jurisdiction } = req.body;
   try {
     const draft = await orchestrator.runDrafting({ draftInput, instructions, detailLevel, jurisdiction });
@@ -22,7 +23,7 @@ router.post("/generate", authenticateToken, async (req: Request, res: Response) 
  * SSE-based AI Drafting Generator
  * Streams document content block-by-block.
  */
-router.post("/generate-stream", authenticateToken, async (req: Request, res: Response) => {
+router.post("/generate-stream", authenticateToken, aiLimiter, async (req: Request, res: Response) => {
   const { mode, outputLevel, instructions, formFields, templateId, sourceText, playbookText } = req.body;
 
   res.setHeader('Content-Type', 'text/event-stream');

@@ -9,9 +9,15 @@ import { encryptData } from "../utils/crypto.js";
 import { Queue, Worker, Job as BullJob } from "bullmq";
 import IORedis from "ioredis";
 
-const redisConnection = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379", {
+const REDIS_URL = process.env.REDIS_URL || "redis://127.0.0.1:6379";
+
+const redisConnection = new IORedis(REDIS_URL, {
   maxRetriesPerRequest: null,
 });
+
+// Redis connection for Pub/Sub
+const pubClient = new IORedis(REDIS_URL, { maxRetriesPerRequest: null });
+const subClient = new IORedis(REDIS_URL, { maxRetriesPerRequest: null });
 
 export const jobQueueName = "cookiecare-jobs";
 export const jobQueue = new Queue(jobQueueName, { connection: redisConnection });
@@ -47,14 +53,12 @@ async function updateJobState(jobId: string, updates: { status?: string; progres
 export async function addJobToQueue(userId: string, type: JobType, payload: any) {
   const jobId = crypto.randomUUID();
 
-  // 1. Persist to DB first to avoid race conditions with workers
   await pool.query(
     `INSERT INTO jobs (id, user_id, type, status, progress, message, payload)
      VALUES ($1, $2, $3, $4, $5, $6, $7)`,
     [jobId, userId, type, "queued", 0, "Job queued in BullMQ...", JSON.stringify(payload)]
   );
 
-  // 2. Add to BullMQ with the same ID
   const job = await jobQueue.add(type, {
     type,
     userId,
@@ -99,7 +103,34 @@ class BackgroundJobRegistry {
   public orchestrator = new AgentOrchestrator();
   public scanner = new ScannerService();
 
+  constructor() {
+    // Listen for cross-instance job updates via Redis
+    subClient.subscribe("job_updates", (err) => {
+      if (err) console.error("[JobRegistry] Redis subscribe error:", err);
+    });
+
+    subClient.on("message", (channel, message) => {
+      if (channel === "job_updates") {
+        try {
+          const { userId, job } = JSON.parse(message);
+          this.localBroadcast(userId, job);
+        } catch (err) {
+          console.error("[JobRegistry] Failed to parse Redis message:", err);
+        }
+      }
+    });
+  }
+
+  /**
+   * Broadcasts to local SSE clients and publishes to Redis for other instances
+   */
   public broadcast(userId: string, job: any): void {
+    const payload = { userId, job };
+    pubClient.publish("job_updates", JSON.stringify(payload));
+    this.localBroadcast(userId, job);
+  }
+
+  private localBroadcast(userId: string, job: any): void {
     const payloadStr = JSON.stringify({ event: "job_update", job });
     for (const client of this.clients) {
       if (client.userId === userId) {

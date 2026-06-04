@@ -1,11 +1,12 @@
 import { Router, Request, Response } from "express";
 import { authenticateToken } from "../middleware/auth.js";
 import { AgentOrchestrator } from "../agents/legalAgent.js";
+import { aiLimiter } from "../middleware/rateLimiter.js";
 
 const router = Router();
 const orchestrator = new AgentOrchestrator();
 
-router.post("/evaluate", authenticateToken, async (req: Request, res: Response) => {
+router.post("/evaluate", authenticateToken, aiLimiter, async (req: Request, res: Response) => {
   const { content, documentTitle, documentType } = req.body;
   if (!content) return res.status(400).json({ error: "Document content is required" });
 
@@ -24,7 +25,7 @@ router.post("/evaluate", authenticateToken, async (req: Request, res: Response) 
   }
 });
 
-router.post("/compromise", authenticateToken, async (req: Request, res: Response) => {
+router.post("/compromise", authenticateToken, aiLimiter, async (req: Request, res: Response) => {
   const { originalText, riskExplanation } = req.body;
   try {
     const result = await orchestrator.negotiationAgent.draftRedline(originalText, riskExplanation);

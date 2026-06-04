@@ -55,19 +55,60 @@ export class ScannerService {
     const matchedCookies = new Set<string>();
 
     page.on('response', async response => {
-      const setCookie = await response.headerValue('set-cookie');
-      if (setCookie) {
-        const parts = setCookie.split(';');
-        const nameValue = parts[0].split('=');
-        if (nameValue[0]) matchedCookies.add(nameValue[0].trim());
+      try {
+        const setCookie = await response.headerValue('set-cookie');
+        if (setCookie) {
+          const parts = setCookie.split(';');
+          const nameValue = parts[0].split('=');
+          if (nameValue[0]) matchedCookies.add(nameValue[0].trim());
+        }
+      } catch (e) {
+        // Response might be closed
       }
     });
 
     try {
-      await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+      await page.goto(url, { waitUntil: 'networkidle', timeout: 45000 });
 
       const browserCookies = await context.cookies();
       browserCookies.forEach(c => matchedCookies.add(c.name));
+
+      // DOM-based Heuristics for Banner Detection
+      const bannerDetection = await page.evaluate(() => {
+        const selectors = [
+          '[id*="cookie"]', '[class*="cookie"]', '[id*="consent"]', '[class*="consent"]',
+          '[id*="banner"]', '[class*="banner"]', '[id*="notice"]', '[class*="notice"]',
+          '.trustarc-banner', '#onetrust-banner-sdk', '.cc-banner', '.qc-cmp-ui-container'
+        ];
+
+        const keywords = ['cookie', 'consent', 'accept all', 'privacy policy', 'manage choices', 'strictly necessary'];
+
+        let found = false;
+        let visible = false;
+
+        for (const selector of selectors) {
+          const elements = document.querySelectorAll(selector);
+          if (elements.length > 0) {
+            found = true;
+            // Check if any of these elements are visible
+            for (const el of Array.from(elements)) {
+              const style = window.getComputedStyle(el);
+              if (style.display !== 'none' && style.visibility !== 'hidden' && el.getBoundingClientRect().height > 0) {
+                visible = true;
+                break;
+              }
+            }
+          }
+          if (visible) break;
+        }
+
+        if (!found) {
+          const bodyText = document.body.innerText.toLowerCase();
+          found = keywords.some(k => bodyText.includes(k));
+        }
+
+        return { found, visible };
+      });
 
       const pageContent = await page.content();
       const lowerContent = pageContent.toLowerCase();
@@ -88,7 +129,6 @@ export class ScannerService {
       const highRiskCount = detectedCookies.filter(c => c.category === "Marketing" || c.category === "Analytics").length;
       const score = Math.max(0, 100 - (highRiskCount * 15) - (detectedCookies.length * 2));
       const risk = score > 75 ? "Low" : score > 45 ? "Medium" : "High";
-      const hasConsentBanner = lowerContent.includes("cookie") || lowerContent.includes("consent") || lowerContent.includes("accept all");
 
       const result = {
         scanSummary: {
@@ -96,7 +136,8 @@ export class ScannerService {
           level: scanDepth,
           overallScore: score,
           riskLevel: risk,
-          hasConsentBanner,
+          hasConsentBanner: bannerDetection.found,
+          isBannerVisible: bannerDetection.visible,
           loadsBeforeConsent: highRiskCount > 0,
           totalCookiesCount: detectedCookies.length,
           scannedAt: new Date().toISOString()
@@ -115,8 +156,14 @@ export class ScannerService {
             severity: highRiskCount > 0 ? "RED" : "GREEN",
             issue: highRiskCount > 0 ? "Potential marketing trackers detected." : "No critical GDPR gaps detected.",
             remediation: highRiskCount > 0 ? "Implement strict prior consent." : "Maintain current compliance."
-          }
-        ]
+          },
+          (!bannerDetection.found ? {
+            regulation: "ePrivacy",
+            severity: "RED",
+            issue: "No cookie consent banner detected via DOM heuristics.",
+            remediation: "Implement a visible consent management platform (CMP)."
+          } : null)
+        ].filter(Boolean)
       };
 
       await this.saveScanResult(userId, url, "cookie", score, risk, result);
@@ -132,11 +179,12 @@ export class ScannerService {
 
   async scanVulnerability(url: string, userId: string) {
     const browser = await chromium.launch({ headless: true });
-    const page = await browser.newPage();
+    const context = await browser.newContext();
+    const page = await context.newPage();
     const vulnerabilities = [];
 
     try {
-      const response = await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+      const response = await page.goto(url, { waitUntil: 'networkidle', timeout: 45000 });
       const headers = response?.headers() || {};
 
       if (!headers['content-security-policy']) {

@@ -4,6 +4,7 @@ import { config } from "../config/index.js";
 import { authenticateToken } from "../middleware/auth.js";
 import { semanticSearch } from "../RAG/ragService.js";
 import { pool } from "../config/database.js";
+import { aiLimiter } from "../middleware/rateLimiter.js";
 
 const router = Router();
 const genAI = new GoogleGenAI({ apiKey: config.geminiApiKey || "dummy" });
@@ -40,7 +41,7 @@ function getVerifiedSources(jurisdictions: string[], query: string) {
   return sources;
 }
 
-router.post("/ask", authenticateToken, async (req: Request, res: Response) => {
+router.post("/ask", authenticateToken, aiLimiter, async (req: Request, res: Response) => {
   const {
     prompt,
     jurisdiction = [],

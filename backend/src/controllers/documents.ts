@@ -4,6 +4,7 @@ import { addJobToQueue } from "../services/jobQueue.js";
 import { buildPdfBuffer, buildDocxBuffer } from "../services/exportService.js";
 import { encryptData, decryptData } from "../utils/crypto.js";
 import crypto from "crypto";
+import * as diff from "diff";
 
 export const getDocuments = async (req: Request, res: Response) => {
   const userId = req.user!.id;
@@ -138,12 +139,39 @@ export const acceptRedline = async (req: Request, res: Response) => {
     const redlines = doc.redlines || [];
     const index = redlines.findIndex((r: any) => r.id === redlineId);
     if (index === -1) return res.status(404).json({ error: "Redline not found" });
+
     const currentContent = decryptData(doc.content);
-    const newContent = currentContent.replace(redlines[index].originalText, redlines[index].proposedText);
+    const redline = redlines[index];
+
+    // Use diff-based patching for resilient redline merging
+    const patch = diff.createPatch("content", redline.originalText, redline.proposedText);
+    const result = diff.applyPatch(currentContent, patch);
+
+    if (result === false) {
+      // Fallback: If patch fails, attempt a robust string replace with fuzzy matching (trimmed)
+      const fuzzyOriginal = redline.originalText.trim();
+      const fuzzyCurrentContent = currentContent;
+
+      if (fuzzyCurrentContent.includes(fuzzyOriginal)) {
+        const newContent = fuzzyCurrentContent.replace(fuzzyOriginal, redline.proposedText);
+        redlines[index].status = "accepted";
+        await pool.query("UPDATE files SET content = $1, redlines = $2 WHERE id = $3", [encryptData(newContent), JSON.stringify(redlines), id]);
+        return res.json({ success: true, message: "Redline merged with fuzzy fallback." });
+      }
+
+      return res.status(422).json({
+        error: "Patch application failed. The document structure has changed significantly.",
+        details: "Original text fragment not found in current document state."
+      });
+    }
+
     redlines[index].status = "accepted";
-    await pool.query("UPDATE files SET content = $1, redlines = $2 WHERE id = $3", [encryptData(newContent), JSON.stringify(redlines), id]);
-    res.json({ success: true });
-  } catch (err: any) { res.status(500).json({ error: err.message }); }
+    await pool.query("UPDATE files SET content = $1, redlines = $2 WHERE id = $3", [encryptData(result), JSON.stringify(redlines), id]);
+    res.json({ success: true, message: "Redline merged successfully via patch." });
+  } catch (err: any) {
+    console.error("acceptRedline failed:", err);
+    res.status(500).json({ error: err.message });
+  }
 };
 
 export const rejectRedline = async (req: Request, res: Response) => {
