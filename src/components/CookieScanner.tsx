@@ -65,33 +65,64 @@ export default function CookieScanner({ authToken }: CookieScannerProps) {
       }
 
       if (res.status === 202 && data.job_id) {
-        let completed = false;
-        let attempts = 0;
-        while (!completed && attempts < 100) {
-          await new Promise((resolve) => setTimeout(resolve, 1500));
-          attempts++;
-          const checkRes = await fetch(apiUrl(`/api/jobs/${data.job_id}`), {
-            headers: {
-              "Authorization": `Bearer ${authToken}`,
-            },
-          });
-          if (checkRes.ok) {
-            const checkData = await checkRes.json();
-            if (checkData.status === "completed") {
-              setResult(checkData.result);
-              completed = true;
-            } else if (checkData.status === "failed") {
-              throw new Error(checkData.error || "Compliance background scanner aborted.");
+        // SSE for real-time progress
+        const eventSource = new EventSource(apiUrl(`/api/jobs/sse?token=${authToken}`));
+
+        eventSource.onmessage = (event) => {
+          const payload = JSON.parse(event.data);
+
+          if (payload.event === "job_update" && payload.job.id === data.job_id) {
+            const job = payload.job;
+            if (job.status === "completed") {
+              setResult(job.result);
+              setScanning(false);
+              eventSource.close();
+            } else if (job.status === "failed") {
+              setError(job.error || "Scanner failed unexpectedly.");
+              setScanning(false);
+              eventSource.close();
             }
           }
-        }
+        };
+
+        eventSource.onerror = (err) => {
+          console.error("SSE Error:", err);
+          eventSource.close();
+          // Fallback to polling if SSE fails
+          pollJob(data.job_id);
+        };
       } else {
         setResult(data);
+        setScanning(false);
       }
     } catch (err: any) {
       setError(err.message || "An unexpected error occurred during privacy web audit.");
     } finally {
       setScanning(false);
+    }
+  };
+
+  const pollJob = async (jobId: string) => {
+    let completed = false;
+    let attempts = 0;
+    while (!completed && attempts < 100) {
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      attempts++;
+      const checkRes = await fetch(apiUrl(`/api/jobs/${jobId}`), {
+        headers: { "Authorization": `Bearer ${authToken}` },
+      });
+      if (checkRes.ok) {
+        const checkData = await checkRes.json();
+        if (checkData.status === "completed") {
+          setResult(checkData.result);
+          setScanning(false);
+          completed = true;
+        } else if (checkData.status === "failed") {
+          setError(checkData.error || "Job failed.");
+          setScanning(false);
+          completed = true;
+        }
+      }
     }
   };
 

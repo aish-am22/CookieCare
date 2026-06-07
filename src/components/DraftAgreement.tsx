@@ -54,116 +54,7 @@ import {
 } from "lucide-react";
 import { LegalDocument, Version } from "../types";
 
-// ==============================================================================
-// TEMPLATE & CLAUSE COLLECTIONS (Matching Screenshot 5 & 6 Folders)
-// ==============================================================================
-const templateFolders = [
-  {
-    name: "CookieCare Templates",
-    count: 10,
-    items: [
-      "Mutual Non-Disclosure Agreement",
-      "Service Level Agreement (SLA)",
-      "Data Protection Addendum (GDPR DPA)",
-      "Vesting Clauses & Equity Structure",
-      "Arbitration Petition (Section 11)",
-      "Employment Covenant Framework",
-      "Commercial Vendor Lease Provision",
-      "Executive NDA with Non-Compete",
-      "Proprietary Assignment Covenant",
-      "Corporate Resolution Charter"
-    ]
-  },
-  {
-    name: "State of Florida - Temp",
-    count: 1,
-    items: [
-      "Florida General Affidavit of Identity"
-    ]
-  },
-  {
-    name: "Test Folder",
-    count: 2,
-    items: [
-      "Test Draft Alpha NDA",
-      "Test Draft Beta Service"
-    ]
-  }
-];
-
-const clauseCategories = [
-  {
-    name: "CookieCare Clause Library",
-    count: 6,
-    items: [
-      "Non-Solicitation of Staff Covenants",
-      "Confidentiality Material Exemption List",
-      "Tech Support Restraint (12 months limit)",
-      "Force Majeure Pandemic Provisions",
-      "Indemnity Double-cap Liability Limits",
-      "Severability Rule Book"
-    ]
-  },
-  {
-    name: "Sample Clauses",
-    count: 1,
-    items: [
-      "Sample Standard Default NDA clause"
-    ]
-  },
-  {
-    name: "Boilerplate Provisions",
-    count: 17,
-    items: [
-      "Standard Waiver & Amendment",
-      "Counterparts Execution Rules",
-      "Entire Agreement Merger Clause",
-      "Survival of Duties on Term"
-    ]
-  },
-  {
-    name: "Commercial Risk",
-    count: 9,
-    items: [
-      "Limitation of Direct Damages cap",
-      "Indirect and Consequential Excludes",
-      "Authorized Spend Deviation Approval"
-    ]
-  },
-  {
-    name: "Data Privacy & IP",
-    count: 6,
-    items: [
-      "GDPR Process Ownership clauses",
-      "Data Incident Breach Notifications",
-      "Subprocessor Inspection Covenants"
-    ]
-  },
-  {
-    name: "Governing Law & Dispute Resolution",
-    count: 8,
-    items: [
-      "Delaware Chancery Exclusive Forum",
-      "ICC Fast-track Arbitration Rules"
-    ]
-  },
-  {
-    name: "Operational, Compliance & Ethical",
-    count: 5,
-    items: [
-      "Anti-Bribery FCPA Warranties",
-      "Modern Slavery Policy Adherence"
-    ]
-  },
-  {
-    name: "Termination & Post-Termination",
-    count: 5,
-    items: [
-      "Termination for Corporate Convenience",
-      "Post-Termination Data Sanitization"
-    ]
-  }
-];
+// Dynamic template and clause integration
 
 // ==============================================================================
 // HIGH-FIDELITY DEFAULT TEXT CONSTANTS (Matching Screenshots 2 and 7)
@@ -251,6 +142,42 @@ interface DraftAgreementProps {
 }
 
 export default function DraftAgreement({ documents, authToken, onRefresh, onSelectDocument }: DraftAgreementProps) {
+  const [templateFolders, setTemplateFolders] = useState<any[]>([]);
+  const [clauseCategories, setClauseCategories] = useState<any[]>([]);
+
+  const fetchLibrary = async () => {
+    try {
+      const res = await fetch(apiUrl("/api/library-items"), {
+        headers: { "Authorization": `Bearer ${authToken}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+
+        // Group by type/category
+        const templates = data.filter((i: any) => i.type === "templates");
+        const clauses = data.filter((i: any) => i.type === "clauses");
+
+        setTemplateFolders([{
+          name: "PrivSecAI Templates",
+          count: templates.length,
+          items: templates.map((t: any) => t.name)
+        }]);
+
+        setClauseCategories([{
+          name: "PrivSecAI Clause Library",
+          count: clauses.length,
+          items: clauses.map((c: any) => c.name)
+        }]);
+      }
+    } catch (err) {
+      console.error("Library fetch failed", err);
+    }
+  };
+
+  useEffect(() => {
+    fetchLibrary();
+  }, [authToken]);
+
   // Current active draft or editor context
   const [selectedDoc, setSelectedDoc] = useState<LegalDocument | null>(documents[0] || null);
   const [editorContent, setEditorContent] = useState(selectedDoc ? selectedDoc.content : "");
@@ -416,29 +343,29 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
       if (!res.ok) throw new Error(payload.error || "File upload failed");
 
       if (res.status === 202 && payload.job_id) {
-        setStreamingProgress("Offloaded to background job-queue. Processing file... (0%)");
-        let completed = false;
-        let attempts = 0;
-        while (!completed && attempts < 100) {
-          await new Promise((resolve) => setTimeout(resolve, 1500));
-          attempts++;
-          const checkRes = await fetch(`/api/jobs/${payload.job_id}`, {
-            headers: {
-              "Authorization": `Bearer ${authToken}`
-            }
-          });
-          if (checkRes.ok) {
-            const checkData = await checkRes.json();
-            setStreamingProgress(`Processing file... (${checkData.progress}%) - ${checkData.message}`);
-            if (checkData.status === "completed") {
-              const resultData = checkData.result;
-              payload = resultData;
-              completed = true;
-            } else if (checkData.status === "failed") {
-              throw new Error(checkData.error || "Background parsing failed");
+        setStreamingProgress("Offloaded to background job-queue. Processing file...");
+        const eventSource = new EventSource(apiUrl(`/api/jobs/sse?token=${authToken}`));
+
+        eventSource.onmessage = async (event) => {
+          const data = JSON.parse(event.data);
+          if (data.event === "job_update" && data.job.id === payload.job_id) {
+            setStreamingProgress(`Processing file... (${data.job.progress}%) - ${data.job.message}`);
+
+            if (data.job.status === "completed") {
+              eventSource.close();
+              const resultData = data.job.result;
+              setUploadText(resultData.content || "");
+              await analyzeUploadedTemplate(resultData.content || "");
+              if (onRefresh) onRefresh();
+              setIsParsingTemplate(false);
+            } else if (data.job.status === "failed") {
+              eventSource.close();
+              setIsParsingTemplate(false);
+              alert("Background parsing failed: " + data.job.error);
             }
           }
-        }
+        };
+        return;
       }
 
       setUploadText(payload.content);
@@ -703,7 +630,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
     }
   };
 
-  const handleApplyRewrite = (type: string, param: string = "") => {
+  const handleApplyRewrite = async (type: string, param: string = "") => {
     if (!selectedTextRange) return;
     const originalText = editorContent.substring(selectedTextRange.start, selectedTextRange.end);
     if (!originalText) return;
@@ -713,46 +640,35 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
     setShowAskAiInput(false);
     pushUndoSnapshot(editorContent);
 
-    // Dynamic AI prompt simulation matching Screenshot 3 rewritten results!
-    setTimeout(() => {
-      let rewritten = originalText;
-      if (type === "tone") {
-        if (param === "Formal") {
-          rewritten = `[● STRICT CONFIDENTIALITY STATUTORY RULES]: The Participating entities undertake to retain all confidential trade data as strictly internal covenants and shall secure compliance under respective jurisdictional regulations.`;
-        } else if (param === "Professional") {
-          rewritten = `The parties contractually agree to protect all shared technology assets and ensure strict non-disclosure across corresponding subsidiary channels.`;
-        } else if (param === "Casual") {
-          rewritten = `We will make sure we keep all info confidential and won't leak any records or materials shared between us.`;
-        } else if (param === "Friendly") {
-          rewritten = `We are excited to build this alliance together, and will make sure all of your shared technology and designs are kept locked away safely and treated with top care.`;
-        } else {
-          rewritten = `This rewritten segment represents strict authorized parameters complying with legal guidelines.`;
-        }
-      } else if (type === "grammar") {
-        rewritten = originalText.replace(/favour/g, "favor").replace(/adgrest/g, "adjust").replace(/clumpsy/g, "clumsy") + " (Vetted for statutory consistency and spelling accuracy.)";
-      } else if (type === "extend") {
-        rewritten = originalText + ` Furthermore, the obligations specified herein shall be binding upon the heirs, successors, representatives, and approved assignees, enduring across any structural merger or corporate restructuring event.`;
-      } else if (type === "reduce") {
-        rewritten = `The Parties agrees to protect shared proprietary information from unapproved third-party dissemination.`;
-      } else if (type === "simplify") {
-        rewritten = `Simply put: both partners must protect each other's secret information and not share it anywhere.`;
-      } else if (type === "complete") {
-        rewritten = originalText + ` IN WITNESS WHEREOF, the duly credentialed delegates execute this covenants package on the statutory dates.`;
-      } else if (type === "ask") {
-        rewritten = `[AI Custom Instruction: ${param}] ${originalText} complies with specified instructions.`;
-      }
+    try {
+      const res = await fetch(apiUrl("/api/drafting/refine"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${authToken}`
+        },
+        body: JSON.stringify({ text: originalText, type, param })
+      });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload.error);
 
+      const rewritten = payload.data;
       const newContent = editorContent.substring(0, selectedTextRange.start) + rewritten + editorContent.substring(selectedTextRange.end);
+
       setEditorContent(newContent);
-      setIsAiRefiningText(false);
-      setShowFloatingMenu(false);
-      setSelectedTextRange(null);
-      setAskAiQuery("");
       editorSelectionRef.current = {
         start: selectedTextRange.start,
         end: selectedTextRange.start + rewritten.length
       };
-    }, 1100);
+    } catch (err: any) {
+      console.error("Refinement failed", err);
+      alert("Refinement failed: " + err.message);
+    } finally {
+      setIsAiRefiningText(false);
+      setShowFloatingMenu(false);
+      setSelectedTextRange(null);
+      setAskAiQuery("");
+    }
   };
 
   // START STREAMING ENGINE

@@ -53,6 +53,15 @@ export class ScannerService {
 
     const detectedCookies: any[] = [];
     const matchedCookies = new Set<string>();
+    const preloadTrackers: string[] = [];
+
+    // Advanced Interception: Track requests that occur before user interaction
+    page.on('request', request => {
+      const reqUrl = request.url();
+      if (reqUrl.includes("google-analytics.com") || reqUrl.includes("doubleclick.net") || reqUrl.includes("facebook.com/tr")) {
+        preloadTrackers.push(reqUrl);
+      }
+    });
 
     page.on('response', async response => {
       const setCookie = await response.headerValue('set-cookie');
@@ -64,7 +73,9 @@ export class ScannerService {
     });
 
     try {
-      await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+      // Wait a bit to see what fires automatically
+      await page.waitForTimeout(5000);
 
       const browserCookies = await context.cookies();
       browserCookies.forEach(c => matchedCookies.add(c.name));
@@ -86,9 +97,16 @@ export class ScannerService {
       }
 
       const highRiskCount = detectedCookies.filter(c => c.category === "Marketing" || c.category === "Analytics").length;
-      const score = Math.max(0, 100 - (highRiskCount * 15) - (detectedCookies.length * 2));
+
+      // Heuristic for banner detection
+      const bannerKeywords = ["cookie", "consent", "accept all", "gdpr", "privacy settings"];
+      const hasConsentBanner = bannerKeywords.some(k => lowerContent.includes(k));
+
+      // Calculate loadsBeforeConsent based on intercepted requests during the first 5 seconds
+      const loadsBeforeConsent = preloadTrackers.length > 0 || highRiskCount > 0;
+
+      const score = Math.max(0, 100 - (highRiskCount * 15) - (preloadTrackers.length * 10) - (detectedCookies.length * 2));
       const risk = score > 75 ? "Low" : score > 45 ? "Medium" : "High";
-      const hasConsentBanner = lowerContent.includes("cookie") || lowerContent.includes("consent") || lowerContent.includes("accept all");
 
       const result = {
         scanSummary: {
@@ -97,7 +115,7 @@ export class ScannerService {
           overallScore: score,
           riskLevel: risk,
           hasConsentBanner,
-          loadsBeforeConsent: highRiskCount > 0,
+          loadsBeforeConsent,
           totalCookiesCount: detectedCookies.length,
           scannedAt: new Date().toISOString()
         },

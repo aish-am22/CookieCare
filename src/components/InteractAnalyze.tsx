@@ -84,17 +84,35 @@ export default function InteractAnalyze({
   const [showCopyToast, setShowCopyToast] = useState(false);
 
   // --- SELECTION UTILITY PRESSETS ---
-  const [promptLibrary] = useState([
-    { title: "Review Asymmetric Indemnification Liability", prompt: "Analyse whether the clause passes all IP infraction and systemic server delay damages solely onto the client on an asymmetric scale." },
-    { title: "SLA Infrastructure Availability Audit", prompt: "Verify uptime compliance thresholds and standard service credits calculations for cloud disruptions." },
-    { title: "General NDA Dissemination Scrutiny", prompt: "Audit limitations surrounding sub-contracting permissions, data classification parameters, and survival boundaries." }
-  ]);
+  const [promptLibrary, setPromptLibrary] = useState<any[]>([]);
+  const [questionsLibrary, setQuestionsLibrary] = useState<string[]>([]);
 
-  const [questionsLibrary] = useState([
-    "What is the confidentiality survival duration defined in the text?",
-    "Does the processor have data deletion commitments?",
-    "Are there any punitive, non-proven liquidated damages listed?"
-  ]);
+  const fetchLibraryItems = async () => {
+    try {
+      const res = await fetch(apiUrl("/api/library-items"), {
+        headers: { "Authorization": `Bearer ${authToken}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const prompts = data.filter((i: any) => i.type === "prompts").map((p: any) => ({ title: p.name, prompt: p.details }));
+        const questions = data.filter((i: any) => i.type === "questions").flatMap((q: any) => q.details.split("\n").filter((l: string) => l.trim()));
+
+        if (prompts.length > 0) setPromptLibrary(prompts);
+        else setPromptLibrary([
+          { title: "Review Asymmetric Indemnification Liability", prompt: "Analyse whether the clause passes all IP infraction and systemic server delay damages solely onto the client on an asymmetric scale." },
+          { title: "SLA Infrastructure Availability Audit", prompt: "Verify uptime compliance thresholds and standard service credits calculations for cloud disruptions." }
+        ]);
+
+        if (questions.length > 0) setQuestionsLibrary(questions);
+        else setQuestionsLibrary([
+          "What is the confidentiality survival duration defined in the text?",
+          "Are there any punitive, non-proven liquidated damages listed?"
+        ]);
+      }
+    } catch (err) {
+      console.error("Library items fetch failed", err);
+    }
+  };
 
   const fetchFoldersAndDocs = async () => {
     try {
@@ -132,6 +150,7 @@ export default function InteractAnalyze({
 
   useEffect(() => {
     fetchFoldersAndDocs();
+    fetchLibraryItems();
   }, [authToken]);
 
   // --- SIDE PANEL / DRAWER ACTIONS ---
@@ -260,23 +279,24 @@ export default function InteractAnalyze({
       if (!res.ok) throw new Error(payload.error || "Failed to process document upload.");
 
       if (res.status === 202 && payload.job_id) {
-        let completed = false;
-        let attempts = 0;
-        while (!completed && attempts < 100) {
-          await new Promise((resolve) => setTimeout(resolve, 1500));
-          attempts++;
-          const checkRes = await fetch(apiUrl(`/api/jobs/${payload.job_id}`), {
-            headers: { "Authorization": `Bearer ${authToken}` }
-          });
-          if (checkRes.ok) {
-            const checkData = await checkRes.json();
-            if (checkData.status === "completed") {
-              completed = true;
-            } else if (checkData.status === "failed") {
-              throw new Error(checkData.error || "Background processing failed");
+        // Use SSE for file upload progress
+        const eventSource = new EventSource(apiUrl(`/api/jobs/sse?token=${authToken}`));
+        eventSource.onmessage = (event) => {
+          const data = JSON.parse(event.data);
+          if (data.event === "job_update" && data.job.id === payload.job_id) {
+            if (data.job.status === "completed") {
+              eventSource.close();
+              fetchFoldersAndDocs().then(() => { if (onRefresh) onRefresh(); });
+              setIsUploading(false);
+              setIsSidePanelOpen(false);
+            } else if (data.job.status === "failed") {
+              eventSource.close();
+              setIsUploading(false);
+              alert("Processing failed: " + data.job.error);
             }
           }
-        }
+        };
+        return; // Exit early as SSE handles completion
       }
 
       await fetchFoldersAndDocs();

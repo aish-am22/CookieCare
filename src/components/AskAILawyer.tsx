@@ -60,7 +60,7 @@ interface AskAILawyerProps {
   documents?: LegalDocument[];
 }
 
-export default function AskAILawyer({ authToken, documents = [] }: AskAILawyerProps) {
+export default function AskAILawyer({ authToken, documents: propDocs = [] }: AskAILawyerProps) {
   // 1. INPUT STATES
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedFormat, setSelectedFormat] = useState<"Brief Summary" | "Full IRAC" | "CREAC">("Full IRAC");
@@ -75,34 +75,43 @@ export default function AskAILawyer({ authToken, documents = [] }: AskAILawyerPr
   ]);
 
   // 2. KNOWLEDGE BASE FOLDERS STATE
-  const [folders, setFolders] = useState<KBFolder[]>([
-    {
-      id: "folder_1",
-      name: "Privacy Policies & DPA",
-      isSelected: true,
-      files: [
-        { name: "gdpr_data_privacy_addendum.pdf", type: "PDF", size: "12.4 MB", content: "Data processing standard clauses for GDPR Article 28 parameters." },
-        { name: "cookie_consent_tracker_policy.docx", type: "DOCX", size: "4.2 MB", content: "Client facing cookie banner and tracking tag scripts consent clauses." }
-      ]
-    },
-    {
-      id: "folder_2",
-      name: "Direct Taxes & Audits",
-      isSelected: false,
-      files: [
-        { name: "form_16_scrutiny_audit_2025.pdf", type: "PDF", size: "28.1 MB", content: "Tax assessment statement matching direct tax scrutiny notices." },
-        { name: "gstin_reconciliation_q3.csv", type: "CSV", size: "1.8 MB", content: "Reconciliation numbers matching corporate tax declarations." }
-      ]
-    },
-    {
-      id: "folder_3",
-      name: "Delaware Corporate Bylaws",
-      isSelected: true,
-      files: [
-        { name: "cookiecare_delaware_bylaws_revised.docx", type: "DOCX", size: "8.5 MB", content: "Board of director authorization limits and stockholder notice parameters." }
-      ]
+  const [folders, setFolders] = useState<KBFolder[]>([]);
+
+  const fetchKnowledgeBase = async () => {
+    try {
+      const [foldersRes, docsRes] = await Promise.all([
+        fetch(apiUrl("/api/folders"), { headers: { "Authorization": `Bearer ${authToken}` } }),
+        fetch(apiUrl("/api/documents"), { headers: { "Authorization": `Bearer ${authToken}` } })
+      ]);
+
+      if (foldersRes.ok && docsRes.ok) {
+        const foldersData = await foldersRes.json();
+        const docsData = await docsRes.json();
+
+        const formattedFolders: KBFolder[] = foldersData.map((f: any) => ({
+          id: f.id,
+          name: f.name,
+          isSelected: true,
+          files: docsData
+            .filter((d: any) => d.folder_id === f.id)
+            .map((d: any) => ({
+              name: d.title || d.name,
+              type: d.type || "DOC",
+              size: "N/A",
+              content: d.content
+            }))
+        }));
+
+        setFolders(formattedFolders);
+      }
+    } catch (err) {
+      console.error("Failed to fetch knowledge base", err);
     }
-  ]);
+  };
+
+  useEffect(() => {
+    fetchKnowledgeBase();
+  }, [authToken]);
   const [newFolderName, setNewFolderName] = useState("");
   const [activeFolderForUpload, setActiveFolderForUpload] = useState<string>("folder_1");
 
