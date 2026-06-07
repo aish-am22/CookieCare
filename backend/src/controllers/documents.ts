@@ -4,6 +4,7 @@ import { addJobToQueue } from "../services/jobQueue.js";
 import { buildPdfBuffer, buildDocxBuffer } from "../services/exportService.js";
 import { encryptData, decryptData } from "../utils/crypto.js";
 import crypto from "crypto";
+import * as diff from "diff";
 
 export const getDocuments = async (req: Request, res: Response) => {
   const userId = req.user!.id;
@@ -134,16 +135,41 @@ export const acceptRedline = async (req: Request, res: Response) => {
   try {
     const { rows } = await pool.query("SELECT * FROM files WHERE id = $1", [id]);
     if (rows.length === 0) return res.status(404).json({ error: "Document not found" });
+
     const doc = rows[0];
     const redlines = doc.redlines || [];
     const index = redlines.findIndex((r: any) => r.id === redlineId);
     if (index === -1) return res.status(404).json({ error: "Redline not found" });
+
     const currentContent = decryptData(doc.content);
-    const newContent = currentContent.replace(redlines[index].originalText, redlines[index].proposedText);
-    redlines[index].status = "accepted";
-    await pool.query("UPDATE files SET content = $1, redlines = $2 WHERE id = $3", [encryptData(newContent), JSON.stringify(redlines), id]);
+    const proposal = redlines[index];
+
+    // Use resilient patch-and-apply logic instead of simple .replace()
+    // 1. Create a patch from the original vs proposed text
+    const patch = diff.createPatch("content", proposal.originalText, proposal.proposedText);
+
+    // 2. Apply the patch to the full document content
+    const applied = diff.applyPatch(currentContent, patch);
+
+    if (applied === false) {
+      // Fallback: If patch fails (due to minor context shift), attempt direct replacement
+      const fallbackReplaced = currentContent.replace(proposal.originalText, proposal.proposedText);
+      if (fallbackReplaced === currentContent && currentContent.indexOf(proposal.originalText) === -1) {
+        return res.status(400).json({ error: "Could not apply redline. Document structure has changed significantly." });
+      }
+
+      redlines[index].status = "accepted";
+      await pool.query("UPDATE files SET content = $1, redlines = $2 WHERE id = $3", [encryptData(fallbackReplaced), JSON.stringify(redlines), id]);
+    } else {
+      redlines[index].status = "accepted";
+      await pool.query("UPDATE files SET content = $1, redlines = $2 WHERE id = $3", [encryptData(applied), JSON.stringify(redlines), id]);
+    }
+
     res.json({ success: true });
-  } catch (err: any) { res.status(500).json({ error: err.message }); }
+  } catch (err: any) {
+    console.error("Failed to accept redline:", err);
+    res.status(500).json({ error: err.message });
+  }
 };
 
 export const rejectRedline = async (req: Request, res: Response) => {

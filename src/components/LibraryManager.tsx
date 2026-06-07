@@ -244,9 +244,29 @@ const res = await fetch(endpoint, {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Upload failed");
 
-      alert(`File "${file.name}" uploaded successfully to vault.`);
-      fetchLibraryData();
-      setIsAddFileOpen(false);
+      if (res.status === 202 && data.job_id) {
+        const eventSource = new EventSource(apiUrl(`/api/jobs/sse?token=${authToken}`));
+        eventSource.onmessage = (event) => {
+          const payload = JSON.parse(event.data);
+          if (payload.event === "job_update" && payload.job.id === data.job_id) {
+            if (payload.job.status === "completed") {
+              eventSource.close();
+              setUploadProgress(false);
+              fetchLibraryData();
+              setIsAddFileOpen(true); // Keep open but show success? Or close?
+              alert(`File "${file.name}" processed and encrypted.`);
+              setIsAddFileOpen(false);
+            } else if (payload.job.status === "failed") {
+              eventSource.close();
+              setUploadProgress(false);
+              alert("Processing failed: " + payload.job.error);
+            }
+          }
+        };
+      } else {
+        fetchLibraryData();
+        setIsAddFileOpen(false);
+      }
     } catch (err: any) {
       console.error(err);
       alert("Upload failed: " + err.message);
