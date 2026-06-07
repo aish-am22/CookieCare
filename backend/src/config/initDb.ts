@@ -123,6 +123,33 @@ export async function dbInit() {
       );
     `);
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS system_settings (
+        key VARCHAR(255) PRIMARY KEY,
+        value JSONB NOT NULL,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Seed default settings for AI Lawyer
+    await client.query(`
+      INSERT INTO system_settings (key, value)
+      VALUES
+        ('jurisdictions', '[
+          {"key": "in_direct", "label": "India (Direct Taxes)"},
+          {"key": "in_indirect", "label": "India (Indirect Taxes)"},
+          {"key": "in_corp", "label": "India (Corporate Laws)"},
+          {"key": "in_general", "label": "India (General Laws)"},
+          {"key": "us_fed", "label": "United States (Federal Legal Research)"},
+          {"key": "us_state", "label": "United States (State Legal Research)"}
+        ]'::jsonb),
+        ('web_discovery_sources', '[
+          "https://mca.gov.in/content/mca/global/en/home.html",
+          "https://www.sec.gov/news/pressreleases"
+        ]'::jsonb)
+      ON CONFLICT (key) DO NOTHING;
+    `);
+
     const hashedSeedPassword = await argon2.hash("MamuSecure2026!");
     await client.query(`
       INSERT INTO users (id, email, name, password_hash, status, role, approved_at)
@@ -131,7 +158,7 @@ export async function dbInit() {
     `, ["supreme_admin_id", "swarnaaishwarya17@gmail.com", "Supreme Admin", hashedSeedPassword, "APPROVED", "ADMIN"]);
 
     // --- Enterprise Security: Row Level Security (RLS) ---
-    const rlsTables = ['files', 'folders', 'library_items', 'legal_document_chunks', 'website_scans', 'jobs'];
+    const rlsTables = ['files', 'folders', 'library_items', 'legal_document_chunks', 'website_scans', 'jobs', 'agent_execution_logs'];
     for (const table of rlsTables) {
       await client.query(`ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY;`);
 
@@ -146,6 +173,23 @@ export async function dbInit() {
         USING (${ownerColumn} = current_setting('app.current_user_id', true) OR current_setting('app.current_user_role', true) = 'ADMIN');
       `);
     }
+
+    // System Settings RLS: Global Read for authenticated users, Admin Write
+    await client.query(`ALTER TABLE system_settings ENABLE ROW LEVEL SECURITY;`);
+    await client.query(`DROP POLICY IF EXISTS system_settings_read_policy ON system_settings;`);
+    await client.query(`
+      CREATE POLICY system_settings_read_policy ON system_settings
+      FOR SELECT USING (current_setting('app.current_user_id', true) IS NOT NULL);
+    `);
+
+    // Performance Optimization: Indexes
+    await client.query("CREATE INDEX IF NOT EXISTS idx_files_creator_id ON files(creator_id);");
+    await client.query("CREATE INDEX IF NOT EXISTS idx_files_folder_id ON files(folder_id);");
+    await client.query("CREATE INDEX IF NOT EXISTS idx_folders_user_id ON folders(user_id);");
+    await client.query("CREATE INDEX IF NOT EXISTS idx_chunks_file_id ON legal_document_chunks(file_id);");
+    await client.query("CREATE INDEX IF NOT EXISTS idx_chunks_embedding ON legal_document_chunks USING hnsw (embedding vector_cosine_ops);");
+    await client.query("CREATE INDEX IF NOT EXISTS idx_jobs_user_id ON jobs(user_id);");
+    await client.query("CREATE INDEX IF NOT EXISTS idx_agent_logs_user_id ON agent_execution_logs(user_id);");
 
     console.log("Database initialized with RLS and supreme admin seeded.");
   } catch (err) {

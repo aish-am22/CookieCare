@@ -44,7 +44,8 @@ router.post("/interact", authenticateToken, async (req: Request, res: Response) 
       userId,
       documentMode,
       answerStyle,
-      history
+      history,
+      req.dbClient
     );
     res.json(result);
   } catch (err: any) {

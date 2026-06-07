@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import { config } from "../config/index.js";
 import { pool } from "../config/database.js";
+import { PoolClient } from "pg";
 
 interface JwtPayload {
   id: string;
@@ -19,6 +20,7 @@ declare global {
         status: string;
         role: string;
       };
+      dbClient?: PoolClient;
     }
   }
 }
@@ -62,7 +64,48 @@ export const authenticateToken = async (req: Request, res: Response, next: NextF
     }
 
     req.user = user;
-    next();
+
+    // --- Phase 1: Security Hardening - Global RLS Enforcement ---
+    // Acquire a dedicated client for this request to ensure session-scoped RLS variables
+    let client;
+    try {
+      client = await pool.connect();
+      req.dbClient = client;
+
+      // Use set_config for safe parameter binding of session variables
+      await client.query("SELECT set_config('app.current_user_id', $1, true), set_config('app.current_user_role', $2, true)", [user.id, user.role]);
+
+      // Start a transaction for every request to ensure 'true' (local) in set_config works and to group operations
+      await client.query("BEGIN");
+
+      const cleanup = async () => {
+        if (req.dbClient) {
+          const c = req.dbClient;
+          req.dbClient = undefined; // Avoid double release
+          try {
+            // Only commit if transaction is still active
+            await c.query("COMMIT");
+          } catch (e) {
+            try { await c.query("ROLLBACK"); } catch (rE) {}
+          } finally {
+            c.release();
+          }
+        }
+      };
+
+      // Ensure client is released back to pool when response finishes
+      res.on("finish", cleanup);
+
+      // Handle cases where the connection might close prematurely
+      res.on("close", cleanup);
+
+      next();
+    } catch (rlsErr) {
+      if (client) client.release();
+      req.dbClient = undefined;
+      console.error("Failed to initialize RLS session:", rlsErr);
+      return res.status(500).json({ error: "Security initialization failed." });
+    }
   } catch (err: any) {
     if (err.name === 'TokenExpiredError') {
       return res.status(401).json({ error: "Session expired. Please log in again." });

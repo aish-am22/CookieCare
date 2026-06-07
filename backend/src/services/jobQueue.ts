@@ -48,6 +48,8 @@ export async function addJobToQueue(userId: string, type: JobType, payload: any)
   const jobId = crypto.randomUUID();
 
   // 1. Persist to DB first to avoid race conditions with workers
+  // Note: Using pool here because this is often called before middleware or outside request context
+  // But we should try to set the context if possible, or ensure 'jobs' table RLS handles system insertions
   await pool.query(
     `INSERT INTO jobs (id, user_id, type, status, progress, message, payload)
      VALUES ($1, $2, $3, $4, $5, $6, $7)`,
