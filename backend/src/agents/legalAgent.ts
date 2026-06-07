@@ -30,14 +30,15 @@ export class AgentOrchestrator {
   public negotiationAgent = new NegotiationAgent();
   public askLawyerAgent = new AskLawyerAgent();
 
-  async runAnalysis(documentId: string, content: string, userId: string): Promise<any> {
+  async runAnalysis(documentId: string, content: string, userId: string, dbClient?: any): Promise<any> {
     const startedAt = Date.now();
+    const client = dbClient || pool;
     try {
       const result = await this.analysisAgent.runAudit(content, "NDA"); // Assuming NDA for now or extracting from metadata
 
-      await pool.query(
-        "UPDATE files SET analysis = $1 WHERE id = $2 AND creator_id = $3",
-        [JSON.stringify(result), documentId, userId]
+      await client.query(
+        "UPDATE files SET analysis = $1 WHERE id = $2 AND (creator_id = current_setting('app.current_user_id', true) OR current_setting('app.current_user_role', true) = 'ADMIN')",
+        [JSON.stringify(result), documentId]
       );
 
       await this.saveAgentLogs({
@@ -54,7 +55,7 @@ export class AgentOrchestrator {
         }],
         decisions: { "AnalysisAgent": { outcome: "Audit complete", confidence: 100, reasoning: "Heuristic/AI scan", actionTaken: "Updated file analysis" } },
         confidenceScore: 100
-      });
+      }, dbClient);
 
       return result;
     } catch (err) {
@@ -116,26 +117,26 @@ Please rewrite the draft to address these risks while maintaining the original i
     userId: string,
     documentMode: "unified" | "individual" = "unified",
     answerStyle: "narrative" | "tabular" = "narrative",
-    history: any[] = []
+    history: any[] = [],
+    dbClient?: any
   ): Promise<any> {
-    let client;
+    let client = dbClient || pool;
     try {
       const safeFolderIds = Array.isArray(folderIds) ? folderIds : [];
 
-      client = await pool.connect();
       let files: any[] = [];
       
       if (safeFolderIds.length === 0 || safeFolderIds.includes("root")) {
         const folderFilters = safeFolderIds.filter(id => id !== "root");
         const { rows } = await client.query(
-          "SELECT id, title, content FROM files WHERE (folder_id IS NULL OR folder_id = ANY($1)) AND creator_id = $2",
-          [folderFilters, userId]
+          "SELECT id, title, content FROM files WHERE (folder_id IS NULL OR folder_id = ANY($1)) AND (creator_id = current_setting('app.current_user_id', true) OR current_setting('app.current_user_role', true) = 'ADMIN')",
+          [folderFilters]
         );
         files = rows;
       } else {
         const { rows } = await client.query(
-          "SELECT id, title, content FROM files WHERE folder_id = ANY($1) AND creator_id = $2",
-          [safeFolderIds, userId]
+          "SELECT id, title, content FROM files WHERE folder_id = ANY($1) AND (creator_id = current_setting('app.current_user_id', true) OR current_setting('app.current_user_role', true) = 'ADMIN')",
+          [safeFolderIds]
         );
         files = rows;
       }
@@ -163,14 +164,13 @@ Please rewrite the draft to address these risks while maintaining the original i
     } catch (err: any) {
       console.error("AgentOrchestrator interactAnalyze failed:", err);
       throw err;
-    } finally {
-      if (client) client.release();
     }
   }
 
-  private async saveAgentLogs(res: any) {
+  private async saveAgentLogs(res: any, dbClient?: any) {
+    const client = dbClient || pool;
     try {
-      await pool.query(`
+      await client.query(`
         INSERT INTO agent_execution_logs (file_id, user_id, agent_name, task_name, execution_path, decisions, confidence_score, status)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
       `, [

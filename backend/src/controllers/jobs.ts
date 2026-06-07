@@ -1,25 +1,28 @@
 import { Request, Response } from "express";
 import { jobRegistry } from "../services/jobQueue.js";
+import { pool } from "../config/database.js";
 
 export const getJobs = async (req: Request, res: Response) => {
+  const client = req.dbClient || pool;
   try {
-    const userJobs = await jobRegistry.getUserJobs(req.user!.id);
-    res.json(userJobs);
+    // Phase 1: Security Hardening - use RLS client
+    const { rows } = await client.query(
+      "SELECT * FROM jobs WHERE user_id = current_setting('app.current_user_id', true) ORDER BY created_at DESC"
+    );
+    res.json(rows);
   } catch (err: any) {
     res.status(500).json({ error: "Failed to fetch jobs" });
   }
 };
 
 export const getJobById = async (req: Request, res: Response) => {
+  const client = req.dbClient || pool;
   try {
-    const job = await jobRegistry.getJob(req.params.id);
-    if (!job) {
+    const { rows } = await client.query("SELECT * FROM jobs WHERE id = $1", [req.params.id]);
+    if (rows.length === 0) {
       return res.status(404).json({ error: "Background task not found." });
     }
-    if (job.userId !== req.user!.id) {
-      return res.status(403).json({ error: "Access denied. Multi-tenant boundary constraint rule." });
-    }
-    res.json(job);
+    res.json(rows[0]);
   } catch (err: any) {
     res.status(500).json({ error: "Failed to fetch job details" });
   }
