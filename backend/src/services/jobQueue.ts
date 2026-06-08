@@ -311,10 +311,10 @@ async function executeDocumentAnalysis(job: BullJob): Promise<any> {
     await job.updateProgress(30);
     jobRegistry.broadcast(userId, await jobRegistry.transformBullJob(job));
 
-    const context = await jobRegistry.orchestrator.askLawyer(prompt, userId);
+    const result = await jobRegistry.orchestrator.askLawyer(prompt, userId);
 
-    await updateJobState(job.id!, { progress: 100, message: "Advice synthesized." });
-    return { text: context };
+    await updateJobState(job.id!, { progress: 100, message: "Advice synthesized.", result });
+    return result;
   }
 
   if (payload.prompt && payload.folderIds) {
@@ -365,8 +365,19 @@ async function executeTemplateDrafting(job: BullJob): Promise<any> {
 
     const prompt = `${instruction}\n\nText:\n${text}\n\nIMPORTANT: Return only the rewritten text without any quotes or preamble.`;
 
-    const result = await withRetry(() => model.generateContent(prompt));
-    return { data: result.response.text().trim() };
+    const result = await withRetry(() => model.generateContent(prompt)) as any;
+    const content = result.response.text().trim();
+
+    // Auto-persist refined document
+    const docId = "doc_" + crypto.randomUUID();
+    const title = `Refined Text - ${new Date().toLocaleDateString()}`;
+    await pool.query(
+      `INSERT INTO files (id, title, type, content, creator_id, is_encrypted, versions, shared_with, audit_logs)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [docId, title, "draft", encryptData(content), userId, true, JSON.stringify([]), JSON.stringify([]), JSON.stringify([])]
+    );
+
+    return { data: content, file_id: docId };
   }
 
   const { mode, outputLevel, instructions, formFields, templateId, sourceText, playbookText } = payload;
@@ -387,11 +398,20 @@ async function executeTemplateDrafting(job: BullJob): Promise<any> {
     playbookText
   });
 
-  const msg2 = "Drafting complete.";
-  await updateJobState(job.id!, { progress: 100, message: msg2 });
+  // Auto-persist drafted document to 'files' table for the user
+  const docId = "doc_" + crypto.randomUUID();
+  const title = `AI Draft - ${new Date().toLocaleDateString()}`;
+  await pool.query(
+    `INSERT INTO files (id, title, type, content, creator_id, is_encrypted, versions, shared_with, audit_logs)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    [docId, title, "draft", encryptData(result), userId, true, JSON.stringify([]), JSON.stringify([]), JSON.stringify([])]
+  );
+
+  const msg2 = "Drafting complete and saved to vault.";
+  await updateJobState(job.id!, { progress: 100, message: msg2, result: { content: result, file_id: docId } });
   await job.updateProgress(100);
   job.data.message = msg2;
-  return { content: result };
+  return { content: result, file_id: docId };
 }
 
 async function executePrivacyScanning(job: BullJob): Promise<any> {

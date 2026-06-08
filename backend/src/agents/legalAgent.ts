@@ -79,21 +79,34 @@ export class AgentOrchestrator {
     }
   }
 
-  async askLawyer(prompt: string, userId: string): Promise<string> {
+  async askLawyer(prompt: string, userId: string): Promise<{ answer: string, sources: any[] }> {
     try {
       const context = await semanticSearch(userId, prompt, 10);
-      const response = await this.askLawyerAgent.resolveQuery(context, prompt);
+      const answer = await this.askLawyerAgent.resolveQuery(context, prompt);
+
+      const uniqueSources = Array.from(new Set(context.map(c => c.file_id))).map(fileId => {
+        const chunk = context.find(c => c.file_id === fileId);
+        return {
+          id: fileId,
+          title: chunk.title,
+          type: "Document",
+          relevance: "High"
+        };
+      });
 
       // Log for compliance
       await pool.query(`
         INSERT INTO compliance_audit_logs (user_id, action_type, prompt, context_files, ai_response)
         VALUES ($1, $2, $3, $4, $5)
-      `, [userId, 'legal_ask', prompt, JSON.stringify(context.map(c => c.substring(0, 100))), response]);
+      `, [userId, 'legal_ask', prompt, JSON.stringify(context.map(c => c.content.substring(0, 100))), answer]);
 
-      return response;
+      return { answer, sources: uniqueSources };
     } catch (err) {
       console.error("AgentOrchestrator askLawyer failed:", err);
-      return "An error occurred while consulting the AI attorney.";
+      return {
+        answer: "An error occurred while consulting the AI attorney.",
+        sources: []
+      };
     }
   }
 
@@ -114,7 +127,7 @@ export class AgentOrchestrator {
       await pool.query(`
         INSERT INTO compliance_audit_logs (user_id, action_type, prompt, ai_response, metadata)
         VALUES ($1, $2, $3, $4, $5)
-      `, ["system", 'draft_critic_loop', `Iteration ${iterations+1}`, draft, JSON.stringify({ audit_summary: audit.summary })]);
+      `, [null, 'draft_critic_loop', `Iteration ${iterations+1}`, draft, JSON.stringify({ audit_summary: audit.summary })]);
 
       const criticalRisks = audit.risks.filter((r: any) => r.severity === "high" || r.risk_level === "CRITICAL");
 

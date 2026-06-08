@@ -2,7 +2,7 @@ import { pool } from "../config/database.js";
 import fs from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
-import { chromium } from "playwright";
+import { browserManager } from "../utils/browserManager.js";
 
 // ESM path resolution compatible with both tsx and bundled builds
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -52,11 +52,7 @@ export class ScannerService {
       cookies.forEach(c => allDefinitions.push({ ...c, provider }));
     }
 
-    const browser = await chromium.launch({
-      headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
-    });
-    const context = await browser.newContext();
+    const context = await browserManager.newContext();
     const page = await context.newPage();
 
     const detectedCookies: any[] = [];
@@ -165,16 +161,13 @@ export class ScannerService {
         complianceGaps: [{ regulation: "SCAN_ERROR", severity: "RED", issue: err.message, remediation: "Check site accessibility." }]
       };
     } finally {
-      await browser.close();
+      await context.close();
     }
   }
 
   async scanVulnerability(url: string, userId: string) {
-    const browser = await chromium.launch({
-      headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
-    });
-    const page = await browser.newPage();
+    const page = await browserManager.newPage();
+    const context = page.context();
     const vulnerabilities = [];
 
     try {
@@ -221,7 +214,7 @@ export class ScannerService {
       console.error("Vulnerability scan failed:", err);
       throw err;
     } finally {
-      await browser.close();
+      await context.close();
     }
   }
 

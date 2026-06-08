@@ -1,4 +1,4 @@
-import { chromium } from "playwright";
+import { browserManager } from "../utils/browserManager.js";
 import { Document, Packer, Paragraph, HeadingLevel, AlignmentType } from "docx";
 import MarkdownIt from "markdown-it";
 
@@ -13,8 +13,8 @@ const md = new MarkdownIt({
  * This preserves HTML styling and professional layout.
  */
 export const buildPdfBuffer = async (title: string, contentType: string, content: string): Promise<Buffer> => {
-  const browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage();
+  const page = await browserManager.newPage();
+  const context = page.context();
 
   const renderedContent = md.render(content);
 
@@ -60,7 +60,7 @@ export const buildPdfBuffer = async (title: string, contentType: string, content
     printBackground: true
   });
 
-  await browser.close();
+  await context.close();
   return Buffer.from(pdfBuffer);
 };
 

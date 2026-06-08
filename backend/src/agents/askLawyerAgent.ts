@@ -4,10 +4,11 @@ import { config } from "../config/index.js";
 const genAI = new GoogleGenAI({ apiKey: config.geminiApiKey || "dummy" });
 
 export class AskLawyerAgent {
-  async resolveQuery(contextChunks: string[], query: string): Promise<string> {
-    const context = contextChunks.join("\n\n");
+  async resolveQuery(contextChunks: any[], query: string): Promise<string> {
+    const context = contextChunks.map(c => `[SOURCE: ${c.title}] (ID: ${c.file_id})\n${c.content}`).join("\n\n---\n\n");
     const prompt = `You are a brilliant AI Lawyer.
 Answer the user's question precisely using the provided document context.
+If the context contains relevant information, cite the source title.
 
 [CONTEXT]
 ${context}

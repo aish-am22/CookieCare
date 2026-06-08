@@ -6,6 +6,7 @@ import { buildPdfBuffer, buildDocxBuffer } from "../services/exportService.js";
 import { encryptData, decryptData } from "../utils/crypto.js";
 import crypto from "crypto";
 import * as diff from "diff";
+import { fileTypeFromBuffer } from "file-type";
 
 export const getDocuments = async (req: Request, res: Response) => {
   const userEmail = req.user!.email.toLowerCase();
@@ -117,6 +118,14 @@ export const uploadDocument = async (req: Request, res: Response) => {
     return res.status(400).json({ error: "File size exceeds 25MB security threshold." });
   }
 
+  // Phase 3 Hardening: Magic Byte Verification (Deep File Inspection)
+  const type = await fileTypeFromBuffer(file.buffer);
+  const detectedMime = type?.mime || file.mimetype;
+
+  if (!allowedMimeTypes.includes(detectedMime)) {
+    return res.status(400).json({ error: "File signature mismatch. Extension does not match content magic bytes." });
+  }
+
   const { title, folder_id } = req.body;
   const fileId = "doc_" + crypto.randomUUID();
   const fileTitle = title || file.originalname;
@@ -149,6 +158,143 @@ export const uploadDocument = async (req: Request, res: Response) => {
     console.error("Document upload route crash:", err);
     const message = err.message === "DB_UPLOAD_FAILED" ? "Failed to register upload in security log." : "Internal error during background job queueing.";
     res.status(500).json({ error: message });
+  }
+};
+
+export const updateDocument = async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { title, content, folder_id } = req.body;
+  const userId = req.user!.id;
+  const userRole = req.user!.role;
+
+  try {
+    await withTransaction(userId, userRole, async (client) => {
+      // 1. Get current document to archive version
+      const { rows } = await client.query("SELECT * FROM files WHERE id = $1", [id]);
+      if (rows.length === 0) throw new Error("Document not found");
+      const doc = rows[0];
+
+      const versions = doc.versions || [];
+      const oldContent = doc.content;
+      versions.push({
+        id: crypto.randomUUID(),
+        content: oldContent, // Already encrypted
+        createdAt: new Date().toISOString(),
+        author: req.user!.email
+      });
+
+      // 2. Update document
+      const encryptedContent = content ? encryptData(content) : doc.content;
+      await client.query(
+        `UPDATE files SET title = COALESCE($1, title), content = $2, folder_id = COALESCE($3, folder_id), versions = $4, updated_at = CURRENT_TIMESTAMP WHERE id = $5`,
+        [title || null, encryptedContent, folder_id || null, JSON.stringify(versions), id]
+      );
+
+      // 3. Log action
+      await client.query(`
+        INSERT INTO compliance_audit_logs (user_id, action_type, metadata)
+        VALUES ($1, $2, $3)
+      `, [userId, 'document_update', JSON.stringify({ documentId: id, title })]);
+    });
+
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(err.message === "Document not found" ? 404 : 500).json({ error: err.message });
+  }
+};
+
+export const deleteDocument = async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const userId = req.user!.id;
+  const userRole = req.user!.role;
+
+  try {
+    await withTransaction(userId, userRole, async (client) => {
+      // 1. Delete associated RAG chunks first
+      await client.query("DELETE FROM legal_document_chunks WHERE file_id = $1", [id]);
+
+      // 2. Delete file
+      const { rowCount } = await client.query("DELETE FROM files WHERE id = $1", [id]);
+      if (rowCount === 0) throw new Error("Document not found");
+
+      // 3. Log action
+      await client.query(`
+        INSERT INTO compliance_audit_logs (user_id, action_type, metadata)
+        VALUES ($1, $2, $3)
+      `, [userId, 'document_delete', JSON.stringify({ documentId: id })]);
+    });
+
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(err.message === "Document not found" ? 404 : 500).json({ error: err.message });
+  }
+};
+
+export const shareDocument = async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { email, permissions } = req.body;
+  const userId = req.user!.id;
+  const userRole = req.user!.role;
+
+  try {
+    await withTransaction(userId, userRole, async (client) => {
+      const { rows } = await client.query("SELECT shared_with FROM files WHERE id = $1", [id]);
+      if (rows.length === 0) throw new Error("Document not found");
+
+      let sharedWith = rows[0].shared_with || [];
+      if (!sharedWith.includes(email)) {
+        sharedWith.push(email);
+      }
+
+      await client.query("UPDATE files SET shared_with = $1 WHERE id = $2", [JSON.stringify(sharedWith), id]);
+
+      await client.query(`
+        INSERT INTO compliance_audit_logs (user_id, action_type, metadata)
+        VALUES ($1, $2, $3)
+      `, [userId, 'document_share', JSON.stringify({ documentId: id, sharedWith: email, permissions })]);
+    });
+
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(err.message === "Document not found" ? 404 : 500).json({ error: err.message });
+  }
+};
+
+export const signDocument = async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { signatureData } = req.body; // e.g. base64 signature or cryptographic hash
+  const userId = req.user!.id;
+  const userRole = req.user!.role;
+
+  try {
+    await withTransaction(userId, userRole, async (client) => {
+      const { rows } = await client.query("SELECT signatures, content FROM files WHERE id = $1", [id]);
+      if (rows.length === 0) throw new Error("Document not found");
+
+      const signatures = rows[0].signatures || [];
+      const contentHash = crypto.createHash('sha256').update(rows[0].content).digest('hex');
+
+      const newSignature = {
+        id: crypto.randomUUID(),
+        userId,
+        userEmail: req.user!.email,
+        signedAt: new Date().toISOString(),
+        contentHash, // Lock signature to current content state
+        signatureData
+      };
+
+      signatures.push(newSignature);
+      await client.query("UPDATE files SET signatures = $1 WHERE id = $2", [JSON.stringify(signatures), id]);
+
+      await client.query(`
+        INSERT INTO compliance_audit_logs (user_id, action_type, metadata)
+        VALUES ($1, $2, $3)
+      `, [userId, 'document_sign', JSON.stringify({ documentId: id, signatureId: newSignature.id })]);
+    });
+
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(err.message === "Document not found" ? 404 : 500).json({ error: err.message });
   }
 };
 
@@ -203,15 +349,34 @@ export const acceptRedline = async (req: Request, res: Response) => {
     const applied = diff.applyPatch(currentContent, patch);
 
     if (applied === false) {
-      // Fallback: If patch fails (due to minor context shift), attempt direct replacement
-      const fallbackReplaced = currentContent.replace(proposal.originalText, proposal.proposedText);
-      if (fallbackReplaced === currentContent && currentContent.indexOf(proposal.originalText) === -1) {
-        return res.status(400).json({ error: "Could not apply redline. Document structure has changed significantly." });
+      // Phase 2: Context-Aware Fuzzy Matching Fallback
+      // Search for the original text while ignoring whitespace and case sensitivity
+      const normalizedOriginal = proposal.originalText.replace(/\s+/g, ' ').trim().toLowerCase();
+      const normalizedDoc = currentContent.replace(/\s+/g, ' ').toLowerCase();
+
+      let finalContent = currentContent;
+      if (normalizedDoc.includes(normalizedOriginal)) {
+        // Attempt to find the real start/end indexes in the original unnormalized content
+        // This is a simple heuristic: if the normalized version matches, we try to find the best string match
+        // and replace it. For a production-grade fuzzy match, we'd use Levenshtein distance.
+        const occurrences = getAllIndexesOfNormalizedMatch(currentContent, proposal.originalText);
+        if (occurrences.length === 1) {
+          finalContent = currentContent.substring(0, occurrences[0].start) + proposal.proposedText + currentContent.substring(occurrences[0].end);
+        } else {
+          // Direct fallback if heuristic is ambiguous
+          const fallbackReplaced = currentContent.replace(proposal.originalText, proposal.proposedText);
+          if (fallbackReplaced === currentContent && currentContent.indexOf(proposal.originalText) === -1) {
+            return res.status(400).json({ error: "Could not apply redline. Document structure has changed significantly." });
+          }
+          finalContent = fallbackReplaced;
+        }
+      } else {
+        return res.status(400).json({ error: "Could not apply redline. Clause not found in current document state." });
       }
 
       redlines[index].status = "accepted";
       await withTransaction(req.user!.id, req.user!.role, async (client) => {
-        await client.query("UPDATE files SET content = $1, redlines = $2 WHERE id = $3", [encryptData(fallbackReplaced), JSON.stringify(redlines), id]);
+        await client.query("UPDATE files SET content = $1, redlines = $2 WHERE id = $3", [encryptData(finalContent), JSON.stringify(redlines), id]);
         await client.query(`
           INSERT INTO compliance_audit_logs (user_id, action_type, metadata)
           VALUES ($1, $2, $3)
@@ -263,6 +428,27 @@ export const rejectRedline = async (req: Request, res: Response) => {
     res.json({ success: true });
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 };
+
+/**
+ * Helper for fuzzy matching: finds original string boundaries by normalized comparison
+ */
+function getAllIndexesOfNormalizedMatch(source: string, target: string) {
+  const results = [];
+  const targetNorm = target.replace(/\s+/g, ' ').trim().toLowerCase();
+
+  // Slide a window across the source (expensive but accurate for small legal docs)
+  for (let i = 0; i < source.length; i++) {
+    for (let j = i + target.length * 0.8; j < i + target.length * 1.2; j++) {
+      const sub = source.substring(i, j);
+      if (sub.replace(/\s+/g, ' ').trim().toLowerCase() === targetNorm) {
+        results.push({ start: i, end: j });
+        i = j; // Skip ahead
+        break;
+      }
+    }
+  }
+  return results;
+}
 
 export const exportDocument = async (req: Request, res: Response) => {
   const { title, format, contentType, content, documentId } = req.body;

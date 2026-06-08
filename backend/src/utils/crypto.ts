@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { pool } from "../config/database.js";
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY;
 const ALGORITHM = "aes-256-gcm";
@@ -39,6 +40,11 @@ export function decryptData(text: string): string {
       return decrypted;
     } catch (err) {
       console.error("Decryption failed:", err);
+      // Log failed decryption for compliance audit
+      pool.query(`
+        INSERT INTO compliance_audit_logs (user_id, action_type, metadata)
+        VALUES ($1, $2, $3)
+      `, [null, 'decryption_failure', JSON.stringify({ error: (err as Error).message, timestamp: new Date().toISOString() })]).catch(() => {});
       return "[DECRYPTION_FAILURE]";
     }
   }

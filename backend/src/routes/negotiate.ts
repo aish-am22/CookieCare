@@ -18,7 +18,7 @@ router.post("/evaluate", authenticateToken, async (req: Request, res: Response) 
       clauseId: `risk_${index + 1}`,
       original: risk.clause || "",
       replacement: risk.remediation || "Standard compliant clause.",
-      reasoning: risk.explanation || "Identified legal risk.",
+      reasoning: risk.description || "Identified legal risk.",
       riskLevel: risk.severity || "YELLOW"
     }));
     res.json({ data: { markups } });
