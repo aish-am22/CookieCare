@@ -42,20 +42,98 @@ export class ScannerService {
     }
   }
 
+  /**
+   * SSRF Protection: Validate URLs to prevent Server-Side Request Forgery attacks
+   * Blocks: localhost, internal IPs, AWS metadata endpoints, private ranges
+   */
+  private validateUrl(url: string): { valid: boolean; reason?: string } {
+    try {
+      const parsed = new URL(url);
+      const hostname = parsed.hostname.toLowerCase();
+
+      // Blocked hostnames - localhost and loopback variants
+      const blockedHosts = [
+        'localhost',
+        '127.0.0.1',
+        '0.0.0.0',
+        '169.254.169.254', // AWS metadata endpoint
+        '::1', // IPv6 localhost
+        '::ffff:127.0.0.1', // IPv6-mapped IPv4 localhost
+        'localhost.localdomain',
+      ];
+
+      if (blockedHosts.includes(hostname)) {
+        return { valid: false, reason: `Blocked hostname: ${hostname}` };
+      }
+
+      // Private IP ranges (RFC 1918 + link-local)
+      const privateIPPatterns = [
+        /^10\./, // 10.0.0.0/8
+        /^172\.(1[6-9]|2[0-9]|3[01])\./, // 172.16.0.0/12
+        /^192\.168\./, // 192.168.0.0/16
+        /^127\./, // 127.0.0.0/8 (loopback)
+        /^169\.254\./, // 169.254.0.0/16 (link-local)
+        /^fc[0-9a-f]{2}:/i, // IPv6 ULA (fc00::/7)
+        /^fe[89ab][0-9a-f]:/i, // IPv6 link-local (fe80::/10)
+      ];
+
+      for (const pattern of privateIPPatterns) {
+        if (pattern.test(hostname)) {
+          return { valid: false, reason: `Private IP range blocked: ${hostname}` };
+        }
+      }
+
+      // Additional security: block certain ports commonly used in attacks
+      const blockedPorts = ['25', '587', '465']; // SMTP ports
+      if (blockedPorts.includes(parsed.port)) {
+        return { valid: false, reason: `Blocked port: ${parsed.port}` };
+      }
+
+      return { valid: true };
+    } catch (err: any) {
+      return { valid: false, reason: `Invalid URL format: ${err.message}` };
+    }
+  }
+
   // 100% REAL LIVE COOKIE SCAN VIA NETWORK HEADERS
   async scanCookie(url: string, userId: string, scanDepth: string = "Deep") {
     try {
       const targetUrl = url.startsWith('http') ? url : `https://${url}`;
-      
+
+      // CRITICAL: SSRF Validation before making any network request
+      const urlValidation = this.validateUrl(targetUrl);
+      if (!urlValidation.valid) {
+        console.warn(`[SSRF_BLOCKED] Cookie scan attempt blocked: ${urlValidation.reason}`);
+        return {
+          scanSummary: {
+            url: targetUrl,
+            level: scanDepth,
+            overallScore: 0,
+            riskLevel: "ERROR",
+            error: `URL validation failed: ${urlValidation.reason}`,
+            scannedAt: new Date().toISOString()
+          },
+          cookiesDetected: [],
+          complianceGaps: [
+            {
+              regulation: "SSRF_PROTECTION",
+              severity: "RED",
+              issue: `Blocked attempt to scan internal/private domain: ${urlValidation.reason}`,
+              remediation: "Only scan public URLs (e.g., https://example.com). Private IPs, localhost, and AWS metadata endpoints are blocked for security."
+            }
+          ]
+        };
+      }
+
       // Target URL par real incoming payload call hit ho rahi hai
-      const response = await fetch(targetUrl, { 
+      const response = await fetch(targetUrl, {
         method: 'GET',
         headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) PrivSecAI-Scanner/1.0' }
       });
-      
+
       const cookieHeader = response.headers.get('set-cookie') || "";
       const realCookies = cookieHeader.split(',').filter(Boolean).map(c => c.split(';')[0].trim());
-      
+
       const db = await this.loadCookieDb();
       const detectedCookies: any[] = [];
 
@@ -140,6 +218,26 @@ export class ScannerService {
     const vulnerabilities = [];
     try {
       const targetUrl = url.startsWith('http') ? url : `https://${url}`;
+
+      // CRITICAL: SSRF Validation before making any network request
+      const urlValidation = this.validateUrl(targetUrl);
+      if (!urlValidation.valid) {
+        console.warn(`[SSRF_BLOCKED] Vulnerability scan attempt blocked: ${urlValidation.reason}`);
+        return {
+          url: targetUrl,
+          overallScore: 0,
+          riskLevel: "ERROR",
+          error: `URL validation failed: ${urlValidation.reason}`,
+          vulnerabilities: [
+            {
+              name: "SSRF Protection",
+              severity: "High",
+              description: `Blocked attempt to scan internal/private domain: ${urlValidation.reason}`
+            }
+          ]
+        };
+      }
+
       const response = await fetch(targetUrl, { method: 'GET' });
       const headers = response.headers;
 
