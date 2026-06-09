@@ -66,4 +66,23 @@ router.post("/generate-stream", authenticateToken, async (req: Request, res: Res
   }
 });
 
+router.post("/process-uploaded-template", authenticateToken, async (req: Request, res: Response) => {
+  const { fileId, instructions } = req.body;
+  if (!fileId) return res.status(400).json({ error: "File ID is required" });
+
+  try {
+    const job = await addJobToQueue(req.user!.id, "template_drafting", {
+      mode: "reactive",
+      templateId: fileId,
+      instructions,
+      outputLevel: "Balanced"
+    });
+
+    res.status(202).json({ success: true, job_id: job.id });
+  } catch (err: any) {
+    console.error("Process uploaded template error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 export default router;

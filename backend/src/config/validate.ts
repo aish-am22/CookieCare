@@ -24,6 +24,15 @@ export function validateEnv() {
     process.exit(1);
   }
 
+  if (config.geminiApiKey === "dummy") {
+    if (process.env.NODE_ENV === "test") {
+      console.warn("⚠️ Using dummy GEMINI_API_KEY in test mode.");
+    } else {
+      console.error("❌ [FATAL] GEMINI_API_KEY cannot be 'dummy' in non-test environments.");
+      process.exit(1);
+    }
+  }
+
   if (process.env.ENCRYPTION_KEY && Buffer.from(process.env.ENCRYPTION_KEY).length !== 32) {
     console.error("❌ [FATAL] ENCRYPTION_KEY must be exactly 32 bytes.");
     process.exit(1);

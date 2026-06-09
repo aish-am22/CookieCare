@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { pool } from "../config/database.js";
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY;
 const ALGORITHM = "aes-256-gcm";
@@ -39,6 +40,22 @@ export function decryptData(text: string): string {
       return decrypted;
     } catch (err) {
       console.error("Decryption failed:", err);
+      // Log failed decryption for compliance audit in an RLS-compliant way
+      (async () => {
+        let client;
+        try {
+          client = await pool.connect();
+          await client.query("SET LOCAL app.current_user_role = 'ADMIN'");
+          await client.query(`
+            INSERT INTO compliance_audit_logs (user_id, action_type, metadata)
+            VALUES ($1, $2, $3)
+          `, [null, 'decryption_failure', JSON.stringify({ error: (err as Error).message, timestamp: new Date().toISOString() })]);
+        } catch (auditErr) {
+          console.error("Failed to log decryption failure audit:", auditErr);
+        } finally {
+          if (client) client.release();
+        }
+      })();
       return "[DECRYPTION_FAILURE]";
     }
   }
