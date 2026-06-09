@@ -16,8 +16,8 @@ export const getDocuments = async (req: Request, res: Response) => {
   try {
     const docs = await withTransaction(userId, userRole, async (client) => {
       const { rows } = await client.query(
-        "SELECT * FROM files WHERE creator_id = current_setting('app.current_user_id', true) OR shared_with::jsonb @> $1::jsonb ORDER BY created_at DESC",
-        [JSON.stringify([userEmail])]
+        "SELECT * FROM files WHERE creator_id = current_setting('app.current_user_id', true) OR shared_with::jsonb @> $1::jsonb OR shared_with::jsonb @> $2::jsonb ORDER BY created_at DESC",
+        [JSON.stringify([userEmail]), JSON.stringify([{ email: userEmail }])]
       );
       return rows;
     }).catch(e => {
@@ -236,14 +236,38 @@ export const shareDocument = async (req: Request, res: Response) => {
   const userId = req.user!.id;
   const userRole = req.user!.role;
 
+  // Phase 3 Hardening: Input Validation
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!email || !emailRegex.test(email)) {
+    return res.status(400).json({ error: "Invalid email format." });
+  }
+
+  const allowedPermissions = ["view", "edit", "admin"];
+  if (!permissions || !allowedPermissions.includes(permissions)) {
+    return res.status(400).json({ error: "Invalid permissions. Must be view, edit, or admin." });
+  }
+
   try {
     await withTransaction(userId, userRole, async (client) => {
+      // Check if user to share with exists
+      const { rows: userRows } = await client.query("SELECT id FROM users WHERE email = $1", [email.toLowerCase()]);
+      if (userRows.length === 0) throw new Error("USER_NOT_FOUND");
+
       const { rows } = await client.query("SELECT shared_with FROM files WHERE id = $1", [id]);
       if (rows.length === 0) throw new Error("Document not found");
 
       let sharedWith = rows[0].shared_with || [];
-      if (!sharedWith.includes(email)) {
-        sharedWith.push(email);
+      // Ensure sharedWith is an array of objects
+      if (sharedWith.length > 0 && typeof sharedWith[0] === 'string') {
+        // Migration: convert old string array to object array
+        sharedWith = sharedWith.map((e: string) => ({ email: e, permissions: "view" }));
+      }
+
+      const existingIndex = sharedWith.findIndex((s: any) => s.email === email.toLowerCase());
+      if (existingIndex > -1) {
+        sharedWith[existingIndex].permissions = permissions;
+      } else {
+        sharedWith.push({ email: email.toLowerCase(), permissions });
       }
 
       await client.query("UPDATE files SET shared_with = $1 WHERE id = $2", [JSON.stringify(sharedWith), id]);
@@ -256,6 +280,7 @@ export const shareDocument = async (req: Request, res: Response) => {
 
     res.json({ success: true });
   } catch (err: any) {
+    if (err.message === "USER_NOT_FOUND") return res.status(404).json({ error: "User with this email not found." });
     res.status(err.message === "Document not found" ? 404 : 500).json({ error: err.message });
   }
 };
@@ -268,11 +293,12 @@ export const signDocument = async (req: Request, res: Response) => {
 
   try {
     await withTransaction(userId, userRole, async (client) => {
-      const { rows } = await client.query("SELECT signatures, content FROM files WHERE id = $1", [id]);
+      const { rows } = await client.query("SELECT signatures, content, is_encrypted FROM files WHERE id = $1", [id]);
       if (rows.length === 0) throw new Error("Document not found");
 
       const signatures = rows[0].signatures || [];
-      const contentHash = crypto.createHash('sha256').update(rows[0].content).digest('hex');
+      const plaintext = rows[0].is_encrypted ? decryptData(rows[0].content) : rows[0].content;
+      const contentHash = crypto.createHash('sha256').update(plaintext, 'utf8').digest('hex');
 
       const newSignature = {
         id: crypto.randomUUID(),

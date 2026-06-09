@@ -26,14 +26,17 @@ export async function getEmbedding(text: string): Promise<number[] | null> {
     }
 
     const result = await withRetry(() =>
-      (genAI as any).getGenerativeModel({ model: "text-embedding-004" }).embedContent(text)
-    );
+      genAI.models.embedContent({
+        model: "text-embedding-004",
+        contents: [{ parts: [{ text }] }]
+      })
+    ) as any;
 
     let vector = null;
-    if (result && (result as any).embedding?.values) {
-      vector = (result as any).embedding.values;
-    } else if (result && (result as any).embeddings?.[0]?.values) {
-      vector = (result as any).embeddings[0].values;
+    if (result && result.embedding?.values) {
+      vector = result.embedding.values;
+    } else if (result && result.embeddings?.[0]?.values) {
+      vector = result.embeddings[0].values;
     }
 
     if (vector) {
@@ -173,6 +176,9 @@ export async function hybridSearch(userId: string, query: string, limit = 5, fol
       if (fileIds.length > 0) {
         filterClause += " AND file_id = ANY($2)";
         queryParams.push(fileIds);
+      } else {
+        // Optimization: Early-exit if folder is empty to prevent global corpus leakage
+        return [];
       }
     }
 
@@ -237,8 +243,6 @@ export async function hybridSearch(userId: string, query: string, limit = 5, fol
 
 async function reRankResults(query: string, documents: any[], limit: number): Promise<any[]> {
   try {
-    const model = (genAI as any).getGenerativeModel({ model: "gemini-2.0-flash" });
-
     const reRankPrompt = `You are a Legal Ranker.
 Evaluate the relevance of the following document chunks to the user query.
 Query: "${query}"
@@ -250,8 +254,11 @@ Return ONLY a comma-separated list of IDs in order of most relevant to least rel
 Example: 2, 0, 1
 If none are relevant, return an empty string.`;
 
-    const result = await withRetry(() => model.generateContent(reRankPrompt)) as any;
-    const text = result.response.text().trim();
+    const result = await withRetry(() => genAI.models.generateContent({
+      model: "gemini-2.0-flash",
+      contents: [{ parts: [{ text: reRankPrompt }] }]
+    })) as any;
+    const text = result.text.trim();
 
     if (!text) return documents.slice(0, limit);
 

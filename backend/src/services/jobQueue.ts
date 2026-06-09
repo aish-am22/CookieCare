@@ -311,7 +311,7 @@ async function executeDocumentAnalysis(job: BullJob): Promise<any> {
     await job.updateProgress(30);
     jobRegistry.broadcast(userId, await jobRegistry.transformBullJob(job));
 
-    const result = await jobRegistry.orchestrator.askLawyer(prompt, userId);
+    const result = await jobRegistry.orchestrator.askLawyer(prompt, userId, documents);
 
     await updateJobState(job.id!, { progress: 100, message: "Advice synthesized.", result });
     return result;
@@ -352,8 +352,6 @@ async function executeTemplateDrafting(job: BullJob): Promise<any> {
 
   if (payload.type === "refine") {
     const { text, refineType, param } = payload;
-    const model = (genAI as any).getGenerativeModel({ model: "gemini-2.0-flash" });
-
     let instruction = "";
     if (refineType === "tone") instruction = `Rewrite the following legal text in a ${param} tone.`;
     else if (refineType === "grammar") instruction = `Fix the spelling and grammar in the following legal text while preserving legal meaning.`;
@@ -365,16 +363,23 @@ async function executeTemplateDrafting(job: BullJob): Promise<any> {
 
     const prompt = `${instruction}\n\nText:\n${text}\n\nIMPORTANT: Return only the rewritten text without any quotes or preamble.`;
 
-    const result = await withRetry(() => model.generateContent(prompt)) as any;
-    const content = result.response.text().trim();
+    const result = await withRetry(() => genAI.models.generateContent({
+      model: "gemini-2.0-flash",
+      contents: [{ parts: [{ text: prompt }] }]
+    })) as any;
+    const content = result.text.trim();
 
     // Auto-persist refined document
     const docId = "doc_" + crypto.randomUUID();
     const title = `Refined Text - ${new Date().toLocaleDateString()}`;
+
+    const { rows: userRows } = await pool.query("SELECT email FROM users WHERE id = $1", [userId]);
+    const creatorEmail = userRows[0]?.email || "";
+
     await pool.query(
-      `INSERT INTO files (id, title, type, content, creator_id, is_encrypted, versions, shared_with, audit_logs)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      [docId, title, "draft", encryptData(content), userId, true, JSON.stringify([]), JSON.stringify([]), JSON.stringify([])]
+      `INSERT INTO files (id, title, type, content, creator_id, creator_email, is_encrypted, versions, shared_with, audit_logs)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [docId, title, "draft", encryptData(content), userId, creatorEmail, true, JSON.stringify([]), JSON.stringify([]), JSON.stringify([])]
     );
 
     return { data: content, file_id: docId };
@@ -401,10 +406,14 @@ async function executeTemplateDrafting(job: BullJob): Promise<any> {
   // Auto-persist drafted document to 'files' table for the user
   const docId = "doc_" + crypto.randomUUID();
   const title = `AI Draft - ${new Date().toLocaleDateString()}`;
+
+  const { rows: userRows } = await pool.query("SELECT email FROM users WHERE id = $1", [userId]);
+  const creatorEmail = userRows[0]?.email || "";
+
   await pool.query(
-    `INSERT INTO files (id, title, type, content, creator_id, is_encrypted, versions, shared_with, audit_logs)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-    [docId, title, "draft", encryptData(result), userId, true, JSON.stringify([]), JSON.stringify([]), JSON.stringify([])]
+    `INSERT INTO files (id, title, type, content, creator_id, creator_email, is_encrypted, versions, shared_with, audit_logs)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+    [docId, title, "draft", encryptData(result), userId, creatorEmail, true, JSON.stringify([]), JSON.stringify([]), JSON.stringify([])]
   );
 
   const msg2 = "Drafting complete and saved to vault.";

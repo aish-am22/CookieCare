@@ -37,8 +37,11 @@ Identify critical liability risks, compliance gaps, and regulatory concerns.
 IMPORTANT: Return your response in clean, well-structured Markdown format. Use headers, bullet points, and bold text for readability.`;
 
     try {
-      const result = await (genAI as any).getGenerativeModel({ model: "gemini-2.0-flash" }).generateContent(fullPrompt);
-      return result.response.text();
+      const result = await genAI.models.generateContent({
+        model: "gemini-2.0-flash",
+        contents: [{ parts: [{ text: fullPrompt }] }]
+      });
+      return result.text;
     } catch (err) {
       console.error("AnalysisAgent error:", err);
       throw err;
@@ -74,13 +77,15 @@ CRITICAL: You must return a valid JSON object matching this schema:
 }`;
 
     try {
-      const model = (genAI as any).getGenerativeModel({
+      const result = await genAI.models.generateContent({
         model: "gemini-2.0-flash",
-        generationConfig: { responseMimeType: "application/json" },
-        systemInstruction
+        config: {
+          responseMimeType: "application/json",
+          systemInstruction
+        },
+        contents: [{ parts: [{ text: `Document Content to Audit:\n${content}` }] }]
       });
-      const result = await model.generateContent(`Document Content to Audit:\n${content}`);
-      const responseText = result.response.text();
+      const responseText = result.text;
 
       // Phase 3: Enforce strict structured output with Zod
       const parsed = JSON.parse(responseText);

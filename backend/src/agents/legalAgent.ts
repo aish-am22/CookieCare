@@ -79,34 +79,50 @@ export class AgentOrchestrator {
     }
   }
 
-  async askLawyer(prompt: string, userId: string): Promise<{ answer: string, sources: any[] }> {
+  async askLawyer(prompt: string, userId: string, documents?: any[]): Promise<{ answer: string, sources: any[] }> {
     try {
-      const context = await semanticSearch(userId, prompt, 10);
+      let context: any[] = [];
+      if (documents && documents.length > 0) {
+        // Use specifically selected documents as context
+        context = documents.map(doc => ({
+          content: doc.content,
+          file_id: doc.id || doc.file_id,
+          title: doc.title || "Selected Document"
+        }));
+      } else {
+        // Fallback to semantic search
+        context = await semanticSearch(userId, prompt, 10);
+      }
+
       const answer = await this.askLawyerAgent.resolveQuery(context, prompt);
 
-      const uniqueSources = Array.from(new Set(context.map(c => c.file_id))).map(fileId => {
-        const chunk = context.find(c => c.file_id === fileId);
-        return {
-          id: fileId,
-          title: chunk.title,
-          type: "Document",
-          relevance: "High"
-        };
-      });
+      // Reconcile sources: include only those actually cited or mentioned in the answer
+      const answerLower = answer.toLowerCase();
+      const reconciledSources = Array.from(new Set(context.map(c => c.file_id)))
+        .map(fileId => {
+          const chunk = context.find(c => c.file_id === fileId);
+          return {
+            id: fileId,
+            title: chunk.title,
+            type: "Document",
+            relevance: "High"
+          };
+        })
+        .filter(source =>
+          answerLower.includes(source.title.toLowerCase()) ||
+          answerLower.includes(source.id.toLowerCase())
+        );
 
       // Log for compliance
       await pool.query(`
         INSERT INTO compliance_audit_logs (user_id, action_type, prompt, context_files, ai_response)
         VALUES ($1, $2, $3, $4, $5)
-      `, [userId, 'legal_ask', prompt, JSON.stringify(context.map(c => c.content.substring(0, 100))), answer]);
+      `, [userId, 'legal_ask', prompt, JSON.stringify(reconciledSources.map(s => s.title)), answer]);
 
-      return { answer, sources: uniqueSources };
+      return { answer, sources: reconciledSources };
     } catch (err) {
       console.error("AgentOrchestrator askLawyer failed:", err);
-      return {
-        answer: "An error occurred while consulting the AI attorney.",
-        sources: []
-      };
+      throw err; // Propagate error for job queue handling
     }
   }
 

@@ -30,13 +30,15 @@ CRITICAL: You must return a valid JSON object matching this schema:
 }`;
 
     try {
-      const model = (genAI as any).getGenerativeModel({
+      const result = await genAI.models.generateContent({
         model: "gemini-2.0-flash",
-        generationConfig: { responseMimeType: "application/json" },
-        systemInstruction
+        config: {
+          responseMimeType: "application/json",
+          systemInstruction
+        },
+        contents: [{ parts: [{ text: `Clause: ${clauseText}\nRisk: ${riskType}` }] }]
       });
-      const result = await model.generateContent(`Clause: ${clauseText}\nRisk: ${riskType}`);
-      const responseText = result.response.text();
+      const responseText = result.text;
 
       // Phase 3: Enforce strict structured output with Zod
       const parsed = JSON.parse(responseText);
