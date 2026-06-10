@@ -7,7 +7,6 @@ import { Page } from "playwright";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { config } from "../config/index.js";
 
-
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 interface CookieDefinition {
@@ -47,14 +46,10 @@ export class ScannerService {
     }
   }
 
-   * SSRF Protection: Validate URLs to prevent Server-Side Request Forgery attacks
-   * Blocks: localhost, internal IPs, AWS metadata endpoints, private ranges
-   */
   private validateUrl(url: string): { valid: boolean; reason?: string } {
     try {
       const parsed = new URL(url);
       const hostname = parsed.hostname.toLowerCase();
-
 
       const blockedHosts = [
         'localhost',
@@ -69,7 +64,6 @@ export class ScannerService {
       if (blockedHosts.includes(hostname)) {
         return { valid: false, reason: `Blocked hostname: ${hostname}` };
       }
-
 
       const privateIPPatterns = [
         /^10\./,
@@ -86,7 +80,6 @@ export class ScannerService {
           return { valid: false, reason: `Private IP range blocked: ${hostname}` };
         }
       }
-
 
       const blockedPorts = ['25', '587', '465'];
       if (blockedPorts.includes(parsed.port)) {
@@ -130,14 +123,10 @@ export class ScannerService {
         const button = page.locator(selector).first();
         if (await button.isVisible({ timeout: 2000 })) {
           await button.click();
-          console.log(`[Scanner] Successfully clicked ${action} button: ${selector}`);
-
           await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
           return true;
         }
-      } catch (e) {
-
-      }
+      } catch (e) {}
     }
     return false;
   }
@@ -160,7 +149,6 @@ export class ScannerService {
   private async discoverUrls(rootUrl: string, limit: number = 20): Promise<string[]> {
     const urls = new Set<string>([rootUrl]);
     const domain = new URL(rootUrl).hostname;
-
 
     const sitemapUrl = new URL('/sitemap.xml', rootUrl).toString();
     if (this.validateUrl(sitemapUrl).valid) {
@@ -185,7 +173,6 @@ export class ScannerService {
     }
 
     if (urls.size >= limit) return Array.from(urls).slice(0, limit);
-
 
     const context = await browserManager.newContext({ optimizeForScanning: true });
     const page = await context.newPage();
@@ -258,15 +245,12 @@ CRITICAL: Return a valid JSON object matching this schema:
     }
   }
 
-
   async scanCookie(url: string, userId: string, scanDepth: string = "Deep") {
     try {
-      const targetUrl = url.startsWith('http') ? url : `https:
-
+      const targetUrl = url.startsWith('http') ? url : `https://${url}`;
 
       const urlValidation = this.validateUrl(targetUrl);
       if (!urlValidation.valid) {
-        console.warn(`[SSRF_BLOCKED] Cookie scan attempt blocked: ${urlValidation.reason}`);
         return {
           scanSummary: {
             url: targetUrl,
@@ -282,25 +266,20 @@ CRITICAL: Return a valid JSON object matching this schema:
               regulation: "SSRF_PROTECTION",
               severity: "RED",
               issue: `Blocked attempt to scan internal/private domain: ${urlValidation.reason}`,
-              remediation: "Only scan public URLs (e.g., https:
+              remediation: "Only scan public URLs (e.g., https://example.com)."
             }
           ]
         };
       }
 
-      console.log(`[Scanner] Starting 3-Stage Scan for: ${targetUrl}`);
-
       const urlsToScan = scanDepth === "Deep"
         ? await this.discoverUrls(targetUrl, 20)
         : [targetUrl];
-
-      console.log(`[Scanner] Depth: ${scanDepth}. Scanning ${urlsToScan.length} URLs.`);
 
       const globalAggregatedCookies = new Map();
       const globalAggregatedStorage: any = { localStorage: {}, sessionStorage: {} };
       let hasConsentBannerGlobal = false;
       const preConsentCookiesGlobal = new Map();
-
 
       for (const currentUrl of urlsToScan) {
         const preContext = await browserManager.newContext({ optimizeForScanning: true });
@@ -320,7 +299,6 @@ CRITICAL: Return a valid JSON object matching this schema:
         }
       }
 
-
       const rejectContext = await browserManager.newContext({ optimizeForScanning: true });
       const acceptContext = await browserManager.newContext({ optimizeForScanning: true });
 
@@ -328,7 +306,6 @@ CRITICAL: Return a valid JSON object matching this schema:
         for (let i = 0; i < urlsToScan.length; i++) {
           const currentUrl = urlsToScan[i];
           const isRoot = i === 0;
-
 
           const rejectPage = await rejectContext.newPage();
           try {
@@ -344,7 +321,6 @@ CRITICAL: Return a valid JSON object matching this schema:
           } finally {
             await rejectPage.close();
           }
-
 
           const acceptPage = await acceptContext.newPage();
           try {
@@ -438,7 +414,7 @@ CRITICAL: Return a valid JSON object matching this schema:
           {
             regulation: "GDPR",
             severity: preConsentCookiesGlobal.size > 0 ? "RED" : "GREEN",
-            issue: preConsentCookiesGlobal.size > 0 ? "Trackers firing before user consent across scanned pages." : "No immediate pre-consent trackers detected.",
+            issue: "Trackers firing before user consent across scanned pages.",
             remediation: "Implement a strict 'hold-back' mechanism for all non-essential scripts until explicit consent is given."
           },
           {
@@ -463,16 +439,13 @@ CRITICAL: Return a valid JSON object matching this schema:
     }
   }
 
-
   async scanVulnerability(url: string, userId: string) {
     const vulnerabilities = [];
     try {
-      const targetUrl = url.startsWith('http') ? url : `https:
-
+      const targetUrl = url.startsWith('http') ? url : `https://${url}`;
 
       const urlValidation = this.validateUrl(targetUrl);
       if (!urlValidation.valid) {
-        console.warn(`[SSRF_BLOCKED] Vulnerability scan attempt blocked: ${urlValidation.reason}`);
         return {
           url: targetUrl,
           overallScore: 0,

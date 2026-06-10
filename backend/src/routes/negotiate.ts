@@ -1,43 +1,17 @@
-import { Router, Request, Response } from "express";
+import { Router } from "express";
 import { authenticateToken } from "../middleware/auth.js";
 import { AgentOrchestrator } from "../agents/legalAgent.js";
 
 const router = Router();
 const orchestrator = new AgentOrchestrator();
 
-router.post("/evaluate", authenticateToken, async (req: Request, res: Response) => {
-  const { content, documentTitle, documentType } = req.body;
-  if (!content) return res.status(400).json({ error: "Document content is required" });
-
+router.post("/run", authenticateToken, async (req, res) => {
   try {
-    const auditResult = await orchestrator.analysisAgent.runAudit(content, documentType || "NDA");
-    if (!auditResult || !auditResult.risks) {
-      throw new Error("MALFORMED_AGENT_RESPONSE");
-    }
-    const markups = (auditResult.risks || []).map((risk: any, index: number) => ({
-      clauseId: `risk_${index + 1}`,
-      original: risk.clause || "",
-      replacement: risk.remediation || "Standard compliant clause.",
-      reasoning: risk.description || "Identified legal risk.",
-      riskLevel: risk.severity || "YELLOW"
-    }));
-    res.json({ data: { markups } });
+    const { documentContent, playbooks, instructions } = req.body;
+    const result = await orchestrator.runNegotiation(documentContent, playbooks, instructions);
+    res.json({ redlines: result });
   } catch (err: any) {
-    console.error("Negotiate evaluation error:", err);
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-router.post("/compromise", authenticateToken, async (req: Request, res: Response) => {
-  const { originalText, riskExplanation } = req.body;
-  if (!originalText) return res.status(400).json({ error: "Original clause text is required." });
-
-  try {
-    const result = await orchestrator.negotiationAgent.draftRedline(originalText, riskExplanation);
-    res.json({ result: result.proposedText || "Standard protection clause applied as compromise." });
-  } catch (err: any) {
-    console.error("Negotiate compromise error:", err);
-    res.status(500).json({ error: "Internal server error" });
+    res.status(500).json({ error: err.message });
   }
 });
 

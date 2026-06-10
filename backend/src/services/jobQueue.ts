@@ -16,7 +16,7 @@ const genAI = new GoogleGenerativeAI(config.geminiApiKey || "dummy");
 
 const connection = new IORedis(config.redisUrl, {
   maxRetriesPerRequest: null,
-});
+}) as any;
 
 export const jobQueueName = "privsecai-jobs";
 

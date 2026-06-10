@@ -37,11 +37,10 @@ Identify critical liability risks, compliance gaps, and regulatory concerns.
 IMPORTANT: Return your response in clean, well-structured Markdown format. Use headers, bullet points, and bold text for readability.`;
 
     try {
-      const result = await genAI.models.generateContent({
-        model: "gemini-2.0-flash",
-        contents: [{ parts: [{ text: fullPrompt }] }]
+      const result = await genAI.getGenerativeModel({ model: "gemini-2.0-flash" }).generateContent({
+        contents: [{ role: "user", parts: [{ text: fullPrompt }] }]
       });
-      return result.text;
+      return result.response.text();
     } catch (err) {
       console.error("AnalysisAgent error:", err);
       throw err;
@@ -77,17 +76,15 @@ CRITICAL: You must return a valid JSON object matching this schema:
 }`;
 
     try {
-      const result = await genAI.models.generateContent({
-        model: "gemini-2.0-flash",
-        config: {
+      const result = await genAI.getGenerativeModel({ model: "gemini-2.0-flash" }).generateContent({
+        generationConfig: {
           responseMimeType: "application/json",
-          systemInstruction
         },
-        contents: [{ parts: [{ text: `Document Content to Audit:\n${content}` }] }]
+        systemInstruction,
+        contents: [{ role: "user", parts: [{ text: `Document Content to Audit:\n${content}` }] }]
       });
-      const responseText = result.text;
+      const responseText = result.response.text();
 
-      // Phase 3: Enforce strict structured output with Zod
       const parsed = JSON.parse(responseText);
       return AuditSchema.parse(parsed);
     } catch (err) {
@@ -102,7 +99,7 @@ CRITICAL: You must return a valid JSON object matching this schema:
       risks.push({
         id: "h_risk_1",
         clause: "Liquidated damages clause detected",
-        severity: "high",
+        severity: "high" as const,
         risk_level: "CRITICAL",
         reasons: ["Potential uncapped liability"],
         non_compliance_tag: "UNCAPPED_LIABILITY",

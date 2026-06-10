@@ -4,24 +4,16 @@ import { config } from "../config/index.js";
 const genAI = new GoogleGenerativeAI(config.geminiApiKey || "dummy");
 
 export class DraftingAgent {
-  async draftDocument(inputs: any): Promise<string> {
-    const { draftInput, instructions, detailLevel, jurisdiction } = inputs;
-    const prompt = `You are an expert legal drafter.
-Draft a legal document based on the following:
-Input: ${draftInput}
-Instructions: ${instructions}
-Detail Level: ${detailLevel}
-Jurisdiction: ${jurisdiction || 'International'}
+  async generateDraft(prompt: string): Promise<string> {
+    const fullPrompt = `You are an expert Legal Draftsman. Generate a professional legal document based on this instruction: ${prompt}
 
-Provide a high-fidelity, professional legal draft.
-IMPORTANT: Return your response in clean, well-structured Markdown format. Use headers, bullet points, and bold text for readability.`;
+Return only the document content in Markdown format. Do not include any preamble or notes.`;
 
     try {
-      const response = await genAI.models.generateContent({
-        model: "gemini-2.0-flash",
-        contents: [{ parts: [{ text: prompt }] }]
+      const response = await genAI.getGenerativeModel({ model: "gemini-2.0-flash" }).generateContent({
+        contents: [{ role: "user", parts: [{ text: fullPrompt }] }]
       });
-      return response.text || "Drafting failed.";
+      return response.response.text();
     } catch (err) {
       console.error("DraftingAgent error:", err);
       throw err;

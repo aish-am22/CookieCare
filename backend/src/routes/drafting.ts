@@ -1,87 +1,28 @@
-import { Router, Request, Response } from "express";
+import { Router } from "express";
 import { authenticateToken } from "../middleware/auth.js";
 import { AgentOrchestrator } from "../agents/legalAgent.js";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { config } from "../config/index.js";
-import { addJobToQueue } from "../services/jobQueue.js";
 
 const router = Router();
 const orchestrator = new AgentOrchestrator();
 const genAI = new GoogleGenerativeAI(config.geminiApiKey || "dummy");
 
-router.post("/generate", authenticateToken, async (req: Request, res: Response) => {
-  const { draftInput, instructions, detailLevel, jurisdiction } = req.body;
-  if (!draftInput && !instructions) return res.status(400).json({ error: "Drafting instructions are required." });
-
+router.post("/generate", authenticateToken, async (req, res) => {
   try {
-    const draft = await orchestrator.runDrafting({ draftInput, instructions, detailLevel, jurisdiction });
-    res.json({ draft });
-  } catch (err: any) {
-    console.error("Drafting generation error:", err);
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-/**
- * SSE-based AI Drafting Generator
- * Streams document content block-by-block.
- */
-router.post("/refine", authenticateToken, async (req: Request, res: Response) => {
-  const { text, type, param } = req.body;
-  if (!text) return res.status(400).json({ error: "Text is required" });
-
-  try {
-    const job = await addJobToQueue(req.user!.id, "template_drafting", {
-      type: "refine",
-      text,
-      refineType: type,
-      param
-    });
-
-    res.status(202).json({ success: true, job_id: job.id });
-  } catch (err: any) {
-    console.error("Refinement queue error:", err);
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-router.post("/generate-stream", authenticateToken, async (req: Request, res: Response) => {
-  const { mode, outputLevel, instructions, formFields, templateId, sourceText, playbookText } = req.body;
-
-  try {
-    const job = await addJobToQueue(req.user!.id, "template_drafting", {
+    const { mode, detailLevel, instructions, formFields, templateId, sourceText, playbookText } = req.body;
+    const result = await orchestrator.runDrafting({
       mode,
-      outputLevel,
+      detailLevel,
       instructions,
       formFields,
       templateId,
       sourceText,
       playbookText
     });
-
-    res.status(202).json({ success: true, job_id: job.id });
+    res.json({ content: result });
   } catch (err: any) {
-    console.error("Drafting queue error:", err);
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-router.post("/process-uploaded-template", authenticateToken, async (req: Request, res: Response) => {
-  const { fileId, instructions } = req.body;
-  if (!fileId) return res.status(400).json({ error: "File ID is required" });
-
-  try {
-    const job = await addJobToQueue(req.user!.id, "template_drafting", {
-      mode: "reactive",
-      templateId: fileId,
-      instructions,
-      outputLevel: "Balanced"
-    });
-
-    res.status(202).json({ success: true, job_id: job.id });
-  } catch (err: any) {
-    console.error("Process uploaded template error:", err);
-    res.status(500).json({ error: "Internal server error" });
+    res.status(500).json({ error: err.message });
   }
 });
 
