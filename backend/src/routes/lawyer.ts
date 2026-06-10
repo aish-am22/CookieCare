@@ -1,5 +1,5 @@
 import { Router, Request, Response } from "express";
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { config } from "../config/index.js";
 import { authenticateToken } from "../middleware/auth.js";
 import { semanticSearch } from "../RAG/ragService.js";
@@ -12,7 +12,7 @@ async function getSystemSettings(key: string, client: any) {
   const { rows } = await client.query("SELECT value FROM system_settings WHERE key = $1", [key]);
   return rows.length > 0 ? rows[0].value : null;
 }
-const genAI = new GoogleGenAI({ apiKey: config.geminiApiKey || "dummy" });
+const genAI = new GoogleGenerativeAI(config.geminiApiKey || "dummy");
 
 
 router.post("/ask", authenticateToken, async (req: Request, res: Response) => {

@@ -1,8 +1,8 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { config } from "../config/index.js";
 import { z } from "zod";
 
-const genAI = new GoogleGenAI({ apiKey: config.geminiApiKey || "dummy" });
+const genAI = new GoogleGenerativeAI(config.geminiApiKey || "dummy");
 
 const AuditSchema = z.object({
   summary: z.string(),

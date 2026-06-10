@@ -1,4 +1,4 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { config } from "../config/index.js";
 import { pool } from "../config/database.js";
 import { withRetry } from "../utils/retry.js";
@@ -15,7 +15,7 @@ const redis = {
   }
 };
 
-const genAI = new GoogleGenAI({ apiKey: config.geminiApiKey || "dummy" });
+const genAI = new GoogleGenerativeAI(config.geminiApiKey || "dummy");
 
 function sanitizeText(str: string): string {
   if (!str) return str;

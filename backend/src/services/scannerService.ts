@@ -2,8 +2,12 @@ import { pool } from "../config/database.js";
 import fs from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
+import { browserManager } from "../utils/browserManager.js";
+import { Page } from "playwright";
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import { config } from "../config/index.js";
 
-// ESM path resolution compatible with both tsx and bundled builds
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 interface CookieDefinition {
@@ -24,6 +28,7 @@ interface CookieDatabase {
 
 export class ScannerService {
   private cookieDb: CookieDatabase | null = null;
+  private genAI = new GoogleGenerativeAI(config.geminiApiKey || "dummy");
 
   private async loadCookieDb() {
     if (this.cookieDb) return this.cookieDb;
@@ -42,7 +47,6 @@ export class ScannerService {
     }
   }
 
-  /**
    * SSRF Protection: Validate URLs to prevent Server-Side Request Forgery attacks
    * Blocks: localhost, internal IPs, AWS metadata endpoints, private ranges
    */
@@ -51,14 +55,14 @@ export class ScannerService {
       const parsed = new URL(url);
       const hostname = parsed.hostname.toLowerCase();
 
-      // Blocked hostnames - localhost and loopback variants
+
       const blockedHosts = [
         'localhost',
         '127.0.0.1',
         '0.0.0.0',
-        '169.254.169.254', // AWS metadata endpoint
-        '::1', // IPv6 localhost
-        '::ffff:127.0.0.1', // IPv6-mapped IPv4 localhost
+        '169.254.169.254',
+        '::1',
+        '::ffff:127.0.0.1',
         'localhost.localdomain',
       ];
 
@@ -66,15 +70,15 @@ export class ScannerService {
         return { valid: false, reason: `Blocked hostname: ${hostname}` };
       }
 
-      // Private IP ranges (RFC 1918 + link-local)
+
       const privateIPPatterns = [
-        /^10\./, // 10.0.0.0/8
-        /^172\.(1[6-9]|2[0-9]|3[01])\./, // 172.16.0.0/12
-        /^192\.168\./, // 192.168.0.0/16
-        /^127\./, // 127.0.0.0/8 (loopback)
-        /^169\.254\./, // 169.254.0.0/16 (link-local)
-        /^fc[0-9a-f]{2}:/i, // IPv6 ULA (fc00::/7)
-        /^fe[89ab][0-9a-f]:/i, // IPv6 link-local (fe80::/10)
+        /^10\./,
+        /^172\.(1[6-9]|2[0-9]|3[01])\./,
+        /^192\.168\./,
+        /^127\./,
+        /^169\.254\./,
+        /^fc[0-9a-f]{2}:/i,
+        /^fe[89ab][0-9a-f]:/i,
       ];
 
       for (const pattern of privateIPPatterns) {
@@ -83,8 +87,8 @@ export class ScannerService {
         }
       }
 
-      // Additional security: block certain ports commonly used in attacks
-      const blockedPorts = ['25', '587', '465']; // SMTP ports
+
+      const blockedPorts = ['25', '587', '465'];
       if (blockedPorts.includes(parsed.port)) {
         return { valid: false, reason: `Blocked port: ${parsed.port}` };
       }
@@ -95,12 +99,171 @@ export class ScannerService {
     }
   }
 
-  // 100% REAL LIVE COOKIE SCAN VIA NETWORK HEADERS
+  private async handleConsentBanner(page: Page, action: 'accept' | 'reject') {
+    const acceptSelectors = [
+      '#onetrust-accept-btn-handler',
+      '#wt-cli-accept-all-btn',
+      '#accept-cookies',
+      'button:has-text("Accept All")',
+      'button:has-text("Allow All")',
+      'button:has-text("I Accept")',
+      'button:has-text("Agree")',
+      '[aria-label*="Accept all"]',
+      '.js-accept-all'
+    ];
+
+    const rejectSelectors = [
+      '#onetrust-reject-all-handler',
+      '#wt-cli-reject-all-btn',
+      'button:has-text("Reject All")',
+      'button:has-text("Decline All")',
+      'button:has-text("Only Necessary")',
+      'button:has-text("Dismiss")',
+      '[aria-label*="Reject all"]',
+      '.js-reject-all'
+    ];
+
+    const selectors = action === 'accept' ? acceptSelectors : rejectSelectors;
+
+    for (const selector of selectors) {
+      try {
+        const button = page.locator(selector).first();
+        if (await button.isVisible({ timeout: 2000 })) {
+          await button.click();
+          console.log(`[Scanner] Successfully clicked ${action} button: ${selector}`);
+
+          await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+          return true;
+        }
+      } catch (e) {
+
+      }
+    }
+    return false;
+  }
+
+  private async capturePageState(page: Page) {
+    const cdp = await page.context().newCDPSession(page);
+    const { cookies } = await cdp.send('Network.getAllCookies');
+    await cdp.detach();
+
+    const storage = await page.evaluate(() => {
+      return {
+        localStorage: { ...localStorage },
+        sessionStorage: { ...sessionStorage }
+      };
+    });
+
+    return { cookies, storage };
+  }
+
+  private async discoverUrls(rootUrl: string, limit: number = 20): Promise<string[]> {
+    const urls = new Set<string>([rootUrl]);
+    const domain = new URL(rootUrl).hostname;
+
+
+    const sitemapUrl = new URL('/sitemap.xml', rootUrl).toString();
+    if (this.validateUrl(sitemapUrl).valid) {
+      try {
+        const resp = await fetch(sitemapUrl, { signal: AbortSignal.timeout(5000) });
+        if (resp.ok) {
+          const text = await resp.text();
+          const matches = text.match(/<loc>(.*?)<\/loc>/g);
+          if (matches) {
+            for (const m of matches) {
+              const loc = m.replace(/<\/?loc>/g, '').trim();
+              if (loc && urls.size < limit) {
+                try {
+                  const u = new URL(loc);
+                  if (u.hostname === domain) urls.add(loc);
+                } catch (e) {}
+              }
+            }
+          }
+        }
+      } catch (e) {}
+    }
+
+    if (urls.size >= limit) return Array.from(urls).slice(0, limit);
+
+
+    const context = await browserManager.newContext({ optimizeForScanning: true });
+    const page = await context.newPage();
+    try {
+      await page.goto(rootUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      const links = await page.evaluate((domain) => {
+        return Array.from(document.querySelectorAll('a'))
+          .map(a => a.href)
+          .filter(href => {
+            try {
+              const u = new URL(href);
+              return u.hostname === domain && (u.protocol === 'http:' || u.protocol === 'https:') && !u.hash;
+            } catch (e) { return false; }
+          });
+      }, domain);
+
+      for (const link of links) {
+        if (urls.size >= limit) break;
+        if (this.validateUrl(link).valid) {
+          urls.add(link);
+        }
+      }
+    } catch (e) {
+    } finally {
+      await context.close();
+    }
+
+    return Array.from(urls).slice(0, limit);
+  }
+
+  private async analyzeTrackersWithAI(trackers: any[], url: string) {
+    const trackerSummary = trackers.map(t => ({
+      name: t.name,
+      domain: t.domain,
+      description: t.description,
+      currentCategory: t.category
+    }));
+
+    const prompt = `You are a Privacy Engineer. Analyze the following trackers detected on ${url} and categorize them into: 'Necessary', 'Functional', 'Analytics', or 'Marketing'.
+Also, identify potential compliance risks and provide remediation steps.
+
+[TRACKERS]
+${JSON.stringify(trackerSummary, null, 2)}
+
+CRITICAL: Return a valid JSON object matching this schema:
+{
+  "categorizedTrackers": [
+    {
+      "name": "string",
+      "category": "Necessary | Functional | Analytics | Marketing",
+      "riskLevel": "LOW | MEDIUM | HIGH",
+      "explanation": "string",
+      "remediation": "string"
+    }
+  ],
+  "overallComplianceRating": "A | B | C | D | F",
+  "summary": "string"
+}`;
+
+    try {
+      const model = this.genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+      const result = await model.generateContent({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: { responseMimeType: "application/json" }
+      });
+      return JSON.parse(result.response.text());
+    } catch (err) {
+      console.error("[Scanner] AI analysis failed:", err);
+      return null;
+    }
+  }
+
+
   async scanCookie(url: string, userId: string, scanDepth: string = "Deep") {
     try {
-      const targetUrl = url.startsWith('http') ? url : `https://${url}`;
+      const targetUrl = url.startsWith('http') ? url : `https:
 
-      // CRITICAL: SSRF Validation before making any network request
+
       const urlValidation = this.validateUrl(targetUrl);
       if (!urlValidation.valid) {
         console.warn(`[SSRF_BLOCKED] Cookie scan attempt blocked: ${urlValidation.reason}`);
@@ -119,37 +282,107 @@ export class ScannerService {
               regulation: "SSRF_PROTECTION",
               severity: "RED",
               issue: `Blocked attempt to scan internal/private domain: ${urlValidation.reason}`,
-              remediation: "Only scan public URLs (e.g., https://example.com). Private IPs, localhost, and AWS metadata endpoints are blocked for security."
+              remediation: "Only scan public URLs (e.g., https:
             }
           ]
         };
       }
 
-      // Target URL par real incoming payload call hit ho rahi hai
-      const response = await fetch(targetUrl, {
-        method: 'GET',
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) PrivSecAI-Scanner/1.0' }
-      });
+      console.log(`[Scanner] Starting 3-Stage Scan for: ${targetUrl}`);
 
-      const cookieHeader = response.headers.get('set-cookie') || "";
-      const realCookies = cookieHeader.split(',').filter(Boolean).map(c => c.split(';')[0].trim());
+      const urlsToScan = scanDepth === "Deep"
+        ? await this.discoverUrls(targetUrl, 20)
+        : [targetUrl];
 
+      console.log(`[Scanner] Depth: ${scanDepth}. Scanning ${urlsToScan.length} URLs.`);
+
+      const globalAggregatedCookies = new Map();
+      const globalAggregatedStorage: any = { localStorage: {}, sessionStorage: {} };
+      let hasConsentBannerGlobal = false;
+      const preConsentCookiesGlobal = new Map();
+
+
+      for (const currentUrl of urlsToScan) {
+        const preContext = await browserManager.newContext({ optimizeForScanning: true });
+        const prePage = await preContext.newPage();
+        try {
+          await prePage.goto(currentUrl, { waitUntil: 'networkidle', timeout: 30000 });
+          const preState = await this.capturePageState(prePage);
+          preState.cookies.forEach((c: any) => {
+            preConsentCookiesGlobal.set(c.name, c);
+            globalAggregatedCookies.set(c.name, c);
+          });
+          Object.assign(globalAggregatedStorage.localStorage, preState.storage.localStorage);
+        } catch (e) {
+          console.error(`[Scanner] Pre-consent capture failed for ${currentUrl}:`, e);
+        } finally {
+          await preContext.close();
+        }
+      }
+
+
+      const rejectContext = await browserManager.newContext({ optimizeForScanning: true });
+      const acceptContext = await browserManager.newContext({ optimizeForScanning: true });
+
+      try {
+        for (let i = 0; i < urlsToScan.length; i++) {
+          const currentUrl = urlsToScan[i];
+          const isRoot = i === 0;
+
+
+          const rejectPage = await rejectContext.newPage();
+          try {
+            await rejectPage.goto(currentUrl, { waitUntil: 'networkidle', timeout: 30000 });
+            if (isRoot) {
+              const rejected = await this.handleConsentBanner(rejectPage, 'reject');
+              if (rejected) hasConsentBannerGlobal = true;
+            }
+            const postRejectState = await this.capturePageState(rejectPage);
+            postRejectState.cookies.forEach((c: any) => globalAggregatedCookies.set(c.name, c));
+          } catch (e) {
+            console.error(`[Scanner] Reject flow failed for ${currentUrl}:`, e);
+          } finally {
+            await rejectPage.close();
+          }
+
+
+          const acceptPage = await acceptContext.newPage();
+          try {
+            await acceptPage.goto(currentUrl, { waitUntil: 'networkidle', timeout: 30000 });
+            if (isRoot) {
+              const accepted = await this.handleConsentBanner(acceptPage, 'accept');
+              if (accepted) hasConsentBannerGlobal = true;
+            }
+            const postAcceptState = await this.capturePageState(acceptPage);
+            postAcceptState.cookies.forEach((c: any) => globalAggregatedCookies.set(c.name, c));
+            Object.assign(globalAggregatedStorage.localStorage, postAcceptState.storage.localStorage);
+          } catch (e) {
+            console.error(`[Scanner] Accept flow failed for ${currentUrl}:`, e);
+          } finally {
+            await acceptPage.close();
+          }
+        }
+      } finally {
+        await rejectContext.close();
+        await acceptContext.close();
+      }
+
+      const allCookies = Array.from(globalAggregatedCookies.values());
       const db = await this.loadCookieDb();
       const detectedCookies: any[] = [];
 
-      // Open-cookie-database se cross-verify kar rahe hain real results ko
-      realCookies.forEach(cookieStr => {
-        const [name] = cookieStr.split('=');
+      for (const cookie of allCookies) {
         let matched = false;
-
         for (const [provider, cookies] of Object.entries(db)) {
-          const match = cookies.find(c => c.cookie?.toLowerCase() === name.toLowerCase());
+          const match = cookies.find(c => c.cookie?.toLowerCase() === cookie.name.toLowerCase());
           if (match) {
             detectedCookies.push({
-              name,
+              name: cookie.name,
               category: match.category,
               domain: provider,
-              description: match.description
+              description: match.description,
+              retention: match.retentionPeriod || "Persistent",
+              severity: (match.category === "Marketing" || match.category === "Analytics") ? "HIGH" : "LOW"
             });
             matched = true;
             break;
@@ -158,16 +391,32 @@ export class ScannerService {
 
         if (!matched) {
           detectedCookies.push({
-            name,
+            name: cookie.name,
             category: "Unclassified",
-            domain: new URL(targetUrl).hostname,
-            description: "Live live runtime connection session cookie."
+            domain: cookie.domain,
+            description: "Dynamic JavaScript-set tracker detected via CDP.",
+            retention: "Session",
+            severity: "MEDIUM"
           });
         }
-      });
+      }
 
-      const highRiskCount = detectedCookies.filter(c => c.category === "Marketing" || c.category === "Analytics").length;
-      const score = Math.max(0, 100 - (highRiskCount * 15) - (detectedCookies.length * 5));
+      const aiAnalysis = await this.analyzeTrackersWithAI(detectedCookies, targetUrl);
+      if (aiAnalysis) {
+        detectedCookies.forEach(cookie => {
+          const aiMatch = aiAnalysis.categorizedTrackers.find((t: any) => t.name === cookie.name);
+          if (aiMatch) {
+            cookie.category = aiMatch.category;
+            cookie.severity = aiMatch.riskLevel;
+            cookie.description = aiMatch.explanation;
+            cookie.remediation = aiMatch.remediation;
+          }
+        });
+      }
+
+      const highRiskCount = detectedCookies.filter(c => c.severity === "HIGH").length;
+      const baseScore = aiAnalysis ? (aiAnalysis.overallComplianceRating === 'A' ? 95 : aiAnalysis.overallComplianceRating === 'B' ? 80 : aiAnalysis.overallComplianceRating === 'C' ? 60 : 40) : 100;
+      const score = Math.max(0, baseScore - (highRiskCount * 5) - (detectedCookies.length * 1));
       const risk = score > 75 ? "Low" : score > 45 ? "Medium" : "High";
 
       const result = {
@@ -176,35 +425,36 @@ export class ScannerService {
           level: scanDepth,
           overallScore: score,
           riskLevel: risk,
-          hasConsentBanner: true,
-          loadsBeforeConsent: detectedCookies.length > 0,
+          hasConsentBanner: hasConsentBannerGlobal,
+          loadsBeforeConsent: preConsentCookiesGlobal.size > 0,
           totalCookiesCount: detectedCookies.length,
-          scannedAt: new Date().toISOString()
+          scannedAt: new Date().toISOString(),
+          pagesScanned: urlsToScan.length,
+          aiSummary: aiAnalysis?.summary,
+          storageDetected: globalAggregatedStorage
         },
-        cookiesDetected: detectedCookies.map(c => ({
-          name: c.name,
-          category: c.category,
-          domain: c.domain,
-          retention: "Session",
-          severity: (c.category === "Marketing" || c.category === "Analytics") ? "HIGH" : "LOW",
-          description: c.description
-        })),
+        cookiesDetected: detectedCookies,
         complianceGaps: [
           {
             regulation: "GDPR",
-            severity: highRiskCount > 0 ? "RED" : "GREEN",
-            issue: highRiskCount > 0 ? "Active tracking cookies running on runtime payload." : "No severe compliance risks identified.",
-            remediation: highRiskCount > 0 ? "Restrict tracker initialization before explicit banner opt-in." : "Maintain monitoring protocols."
+            severity: preConsentCookiesGlobal.size > 0 ? "RED" : "GREEN",
+            issue: preConsentCookiesGlobal.size > 0 ? "Trackers firing before user consent across scanned pages." : "No immediate pre-consent trackers detected.",
+            remediation: "Implement a strict 'hold-back' mechanism for all non-essential scripts until explicit consent is given."
+          },
+          {
+            regulation: "Cookie Law",
+            severity: !hasConsentBannerGlobal ? "RED" : "GREEN",
+            issue: !hasConsentBannerGlobal ? "No visible cookie consent banner detected." : "Consent banner present.",
+            remediation: "Deploy a compliant CMP (Consent Management Platform) to manage user preferences."
           }
         ]
       };
 
-      // Real entry mapping to PostgreSQL
       await this.saveScanResult(userId, url, "cookie", score, risk, result);
       return result;
 
     } catch (err: any) {
-      console.error("Cookie network scan failed:", err);
+      console.error("3-Stage Cookie scan failed:", err);
       return {
         scanSummary: { url, level: scanDepth, overallScore: 0, riskLevel: "ERROR", error: err.message },
         cookiesDetected: [],
@@ -213,13 +463,13 @@ export class ScannerService {
     }
   }
 
-  // 100% REAL SECURITY HEADERS SCAN
+
   async scanVulnerability(url: string, userId: string) {
     const vulnerabilities = [];
     try {
-      const targetUrl = url.startsWith('http') ? url : `https://${url}`;
+      const targetUrl = url.startsWith('http') ? url : `https:
 
-      // CRITICAL: SSRF Validation before making any network request
+
       const urlValidation = this.validateUrl(targetUrl);
       if (!urlValidation.valid) {
         console.warn(`[SSRF_BLOCKED] Vulnerability scan attempt blocked: ${urlValidation.reason}`);

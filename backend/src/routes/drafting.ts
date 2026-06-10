@@ -1,13 +1,13 @@
 import { Router, Request, Response } from "express";
 import { authenticateToken } from "../middleware/auth.js";
 import { AgentOrchestrator } from "../agents/legalAgent.js";
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { config } from "../config/index.js";
 import { addJobToQueue } from "../services/jobQueue.js";
 
 const router = Router();
 const orchestrator = new AgentOrchestrator();
-const genAI = new GoogleGenAI({ apiKey: config.geminiApiKey || "dummy" });
+const genAI = new GoogleGenerativeAI(config.geminiApiKey || "dummy");
 
 router.post("/generate", authenticateToken, async (req: Request, res: Response) => {
   const { draftInput, instructions, detailLevel, jurisdiction } = req.body;

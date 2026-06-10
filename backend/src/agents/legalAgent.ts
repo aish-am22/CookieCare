@@ -1,4 +1,4 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { config } from "../config/index.js";
 import { pool } from "../config/database.js";
 import { semanticSearch } from "../RAG/ragService.js";

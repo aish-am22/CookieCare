@@ -23,7 +23,6 @@ class BrowserManager {
       return this.launchPromise;
     }
 
-    // Explicitly targeting the system's stable Chrome layer to resolve Linux system library errors
     this.launchPromise = chromium.launch({
       headless: true,
       channel: 'chrome', 
@@ -45,7 +44,22 @@ class BrowserManager {
 
   public async newContext(options?: any): Promise<BrowserContext> {
     const browser = await this.getBrowser();
-    return await browser.newContext(options);
+    const context = await browser.newContext(options);
+
+    if (options?.optimizeForScanning) {
+      await context.route("**/*", (route) => {
+        const resourceType = route.request().resourceType();
+        if (["image", "font", "media", "stylesheet"].includes(resourceType)) {
+          if (resourceType === "stylesheet") {
+            return route.continue();
+          }
+          return route.abort();
+        }
+        return route.continue();
+      });
+    }
+
+    return context;
   }
 
   public async newPage(options?: any): Promise<Page> {
