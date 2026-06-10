@@ -1,29 +1,26 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { config } from "../config/index.js";
 
-const genAI = new GoogleGenAI({ apiKey: config.geminiApiKey || "dummy" });
+const genAI = new GoogleGenerativeAI(config.geminiApiKey || "dummy");
 
 export class AskLawyerAgent {
-  async resolveQuery(contextChunks: any[], query: string): Promise<string> {
-    const context = contextChunks.map(c => `[SOURCE: ${c.title}] (ID: ${c.file_id})\n${c.content}`).join("\n\n---\n\n");
-    const prompt = `You are a brilliant AI Lawyer.
-Answer the user's question precisely using the provided document context.
-If the context contains relevant information, cite the source title.
+  async getAdvice(prompt: string, context: string): Promise<string> {
+    const fullPrompt = `You are a Senior Legal Counsel. Provide professional legal advice based on the following context.
+If the information is not in the context, state that you are advising based on general legal principles but recommend consulting with specific jurisdictional counsel.
 
 [CONTEXT]
 ${context}
 
-[QUERY]
-${query}
+[USER QUERY]
+${prompt}
 
-IMPORTANT: Return your response in clean, well-structured Markdown format. Use headers, bullet points, and bold text for readability.`;
+IMPORTANT: Return your response in clean Markdown format.`;
 
     try {
-      const result = await genAI.models.generateContent({
-        model: "gemini-2.0-flash",
-        contents: [{ parts: [{ text: prompt }] }]
+      const result = await genAI.getGenerativeModel({ model: "gemini-2.0-flash" }).generateContent({
+        contents: [{ role: "user", parts: [{ text: fullPrompt }] }]
       });
-      return result.text || "I cannot answer this query right now.";
+      return result.response.text() || "I cannot answer this query right now.";
     } catch (err) {
       console.error("AskLawyerAgent error:", err);
       throw err;
