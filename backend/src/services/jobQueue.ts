@@ -7,16 +7,16 @@ import mammoth from "mammoth";
 import crypto from "crypto";
 import { encryptData } from "../utils/crypto.js";
 import { withRetry } from "../utils/retry.js";
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { config } from "../config/index.js";
 import { Queue, Worker, Job as BullJob } from "bullmq";
 import IORedis from "ioredis";
 
-const genAI = new GoogleGenAI({ apiKey: config.geminiApiKey || "dummy" });
+const genAI = new GoogleGenerativeAI(config.geminiApiKey || "dummy");
 
 const connection = new IORedis(config.redisUrl, {
   maxRetriesPerRequest: null,
-});
+}) as any;
 
 export const jobQueueName = "privsecai-jobs";
 

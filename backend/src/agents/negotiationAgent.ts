@@ -1,59 +1,42 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { config } from "../config/index.js";
-import { z } from "zod";
 
-const genAI = new GoogleGenAI({ apiKey: config.geminiApiKey || "dummy" });
-
-const RedlineSchema = z.object({
-  proposedText: z.string(),
-  comment: z.string(),
-  sideBySide: z.object({
-    original: z.string(),
-    proposed: z.string(),
-    differentialHtml: z.string()
-  })
-});
+const genAI = new GoogleGenerativeAI(config.geminiApiKey || "dummy");
 
 export class NegotiationAgent {
-  async draftRedline(clauseText: string, riskType: string): Promise<z.infer<typeof RedlineSchema>> {
-    const systemInstruction = `You are a Negotiation Agent. Draft a corporate redline alternative.
+  async negotiate(documentContent: string, playbooks: string[], instructions: string): Promise<string> {
+    const playbookText = playbooks.join("\n\n---\n\n");
+    const systemInstruction = `You are an expert Legal Counsel specializing in contract negotiation.
+Your goal is to suggest redlines and improvements for the provided document based on the company's playbooks and specific user instructions.
+Return the output in Markdown format with a summary of changes and the proposed redlines.`;
 
-CRITICAL: You must return a valid JSON object matching this schema:
-{
-  "proposedText": "The improved legal language",
-  "comment": "Strategic rationale for the change",
-  "sideBySide": {
-    "original": "The input clause",
-    "proposed": "The improved language",
-    "differentialHtml": "HTML string highlighting changes (e.g. using <del> and <ins>)"
-  }
-}`;
+    const prompt = `[DOCUMENT CONTENT]
+${documentContent}
+
+[NEGOTIATION PLAYBOOKS]
+${playbookText}
+
+[USER INSTRUCTIONS]
+${instructions}
+
+Provide detailed negotiation advice and specific clause redlines.`;
 
     try {
-      const result = await genAI.models.generateContent({
-        model: "gemini-2.0-flash",
-        config: {
-          responseMimeType: "application/json",
-          systemInstruction
+      const result = await genAI.getGenerativeModel({ model: "gemini-2.0-flash" }).generateContent({
+        generationConfig: {
+           candidateCount: 1
         },
-        contents: [{ parts: [{ text: `Clause: ${clauseText}\nRisk: ${riskType}` }] }]
+        systemInstruction,
+        contents: [{ role: "user", parts: [{ text: prompt }] }]
       });
-      const responseText = result.text;
-
-      // Phase 3: Enforce strict structured output with Zod
-      const parsed = JSON.parse(responseText);
-      return RedlineSchema.parse(parsed);
+      return result.response.text();
     } catch (err) {
-      console.warn("NegotiationAgent AI failed, returning fallback:", err);
-      return {
-        proposedText: "Alternative clause text focused on risk mitigation.",
-        comment: "Balanced compromise for mutual protection.",
-        sideBySide: {
-          original: clauseText,
-          proposed: "Alternative clause text focused on risk mitigation.",
-          differentialHtml: `<div><del>${clauseText}</del> <ins>Alternative clause text focused on risk mitigation.</ins></div>`
-        }
-      };
+      console.error("NegotiationAgent error:", err);
+      throw err;
     }
+  }
+
+  async draftRedline(documentContent: string, playbooks: string[], instructions: string) {
+      return await this.negotiate(documentContent, playbooks, instructions);
   }
 }
