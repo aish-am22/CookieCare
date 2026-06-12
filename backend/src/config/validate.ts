@@ -7,10 +7,6 @@ export function validateEnv() {
     { key: "ENCRYPTION_KEY", value: process.env.ENCRYPTION_KEY },
   ];
 
-  if (process.env.NODE_ENV === "production") {
-    required.push({ key: "REDIS_URL", value: process.env.REDIS_URL });
-  }
-
   const missing = required.filter((item) => !item.value || item.value.trim() === "");
 
   if (missing.length > 0) {
