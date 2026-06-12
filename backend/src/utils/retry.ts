@@ -15,6 +15,9 @@ export async function withRetry<T>(
     const isTransient =
       error.message?.includes("fetch failed") ||
       error.message?.includes("socket hang up") ||
+      error.message?.includes("ECONNRESET") ||
+      error.message?.includes("Connection terminated") ||
+      error.message?.includes("connection timeout") ||
       error.message?.includes("503") ||
       error.message?.includes("504") ||
       error.message?.includes("429"); // Rate limit

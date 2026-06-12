@@ -57,51 +57,46 @@ export async function getEmbedding(text: string): Promise<number[] | null> {
 }
 
 export async function chunkAndIndexDocument(fileId: string, content: string, userId: string) {
+  // Step 1: Generate all embeddings BEFORE acquiring a database connection.
+  // This prevents holding DB connections open during slow external API calls,
+  // which is a common cause of connection pool exhaustion and ECONNRESET on serverless Neon.
+  const cleanedContent = sanitizeText(content);
+  const chunks = splitIntoClauseAwareChunks(cleanedContent);
+  const newChunks: any[] = [];
+
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    if (!chunk || chunk.trim().length === 0) continue;
+
+    const vector = await getEmbedding(chunk);
+    if (!vector || !Array.isArray(vector)) continue;
+
+    const vectorString = `[${vector.join(",")}]`;
+    newChunks.push({
+      index: i,
+      content: sanitizeText(chunk),
+      embedding: vectorString
+    });
+  }
+
+  // Step 2: Acquire a connection only for the atomic DB swap.
   let client;
   try {
     client = await pool.connect();
     await client.query("BEGIN");
     // System context for workers
     await client.query("SET LOCAL app.current_user_role = 'ADMIN'");
-    
-    const cleanedContent = sanitizeText(content);
-    const chunks = splitIntoClauseAwareChunks(cleanedContent);
-    const newChunks: any[] = [];
 
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      if (!chunk || chunk.trim().length === 0) continue;
-
-      const vector = await getEmbedding(chunk);
-      if (!vector || !Array.isArray(vector)) continue;
-
-      const vectorString = `[${vector.join(",")}]`;
-      newChunks.push({
-        index: i,
-        content: sanitizeText(chunk),
-        embedding: vectorString
-      });
-    }
-
-    // Atomic Swap Strategy: Only delete and replace if embeddings were successful
     if (newChunks.length > 0) {
-      await client.query("BEGIN");
-      try {
-        await client.query("DELETE FROM legal_document_chunks WHERE file_id = $1 AND user_id = $2;", [fileId, userId]);
-        for (const chunk of newChunks) {
-          await client.query(`
-            INSERT INTO legal_document_chunks (file_id, user_id, chunk_index, content, embedding, metadata)
-            VALUES ($1, $2, $3, $4, $5, $6);
-          `, [fileId, userId, chunk.index, chunk.content, chunk.embedding, JSON.stringify({})]);
-        }
-        await client.query("COMMIT");
-      } catch (atomicErr) {
-        await client.query("ROLLBACK");
-        throw atomicErr;
+      await client.query("DELETE FROM legal_document_chunks WHERE file_id = $1 AND user_id = $2;", [fileId, userId]);
+      for (const chunk of newChunks) {
+        await client.query(`
+          INSERT INTO legal_document_chunks (file_id, user_id, chunk_index, content, embedding, metadata)
+          VALUES ($1, $2, $3, $4, $5, $6);
+        `, [fileId, userId, chunk.index, chunk.content, chunk.embedding, JSON.stringify({})]);
       }
-    } else {
-      await client.query("COMMIT");
     }
+    await client.query("COMMIT");
   } catch (err) {
     if (client) await client.query("ROLLBACK").catch(() => {});
     console.error(`chunkAndIndexDocument failed for file ${fileId}:`, err);

@@ -6,7 +6,6 @@ import { createServer as createViteServer } from "vite";
 import { config } from "./backend/src/config/index.js";
 import { validateEnv } from "./backend/src/config/validate.js";
 import { initSentry, initSentryErrorHandler } from "./backend/src/config/sentry.js";
-import { dbInit } from "./backend/src/config/initDb.js";
 import apiRoutes from "./backend/src/routes/index.js";
 import { corsMiddleware } from "./backend/src/middleware/cors.js";
 import { errorHandler } from "./backend/src/middleware/error.js";
@@ -50,13 +49,9 @@ app.use(errorHandler);
 
 async function startServer() {
   validateEnv();
-  try {
-    await dbInit();
-    console.log("Database initialized successfully.");
-  } catch (err) {
-    console.error("Database initialization failed:", err);
-    // Do not exit process, allow frontend to run
-  }
+  // Database initialization is decoupled from server startup.
+  // Run `npx tsx scripts/setupDb.ts` manually to initialize the database.
+  console.log("Skipping database initialization on server startup. Run `npx tsx scripts/setupDb.ts` to initialize the database.");
 
   if (config.nodeEnv !== "production") {
     // Bypass external file loading completely to prevent ESM schema URL panic

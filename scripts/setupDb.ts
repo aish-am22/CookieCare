@@ -1,12 +1,40 @@
-import { pool } from "./database.js";
+import { pool } from "../backend/src/config/database.js";
 import argon2 from "argon2";
 
-export async function dbInit() {
-  const client = await pool.connect();
+async function connectWithRetry(retries = 5, delay = 2000): Promise<any> {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const client = await pool.connect();
+      return client;
+    } catch (err: any) {
+      const isLast = i === retries - 1;
+      const message = err.message || "";
+      const isRetryable =
+        message.includes("ECONNRESET") ||
+        message.includes("Connection terminated") ||
+        message.includes("connection timeout") ||
+        message.includes("ETIMEDOUT") ||
+        message.includes("socket hang up");
+
+      if (isLast || !isRetryable) {
+        throw err;
+      }
+
+      console.warn(`Database connection attempt ${i + 1} failed: ${message}. Retrying in ${delay}ms...`);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      delay *= 2;
+    }
+  }
+
+  throw new Error("Failed to connect to database after retries");
+}
+
+async function setupDb() {
+  const client = await connectWithRetry();
 
   try {
     await client.query("BEGIN");
-    console.log("Starting database initialization...");
+    console.log("Starting database setup...");
 
     await client.query("CREATE EXTENSION IF NOT EXISTS vector;");
 
@@ -122,14 +150,8 @@ export async function dbInit() {
       );
     `);
 
-    // Embedding column update (idempotent)
-    const embeddingTypeResult = await client.query(`
-      SELECT data_type FROM information_schema.columns
-      WHERE table_name = 'legal_document_chunks' AND column_name = 'embedding'
-    `);
-    if (embeddingTypeResult.rows.length === 0 || embeddingTypeResult.rows[0].data_type !== 'USER-DEFINED') {
-      await client.query("ALTER TABLE legal_document_chunks ALTER COLUMN embedding TYPE vector(768) USING embedding::vector(768);");
-    }
+    // Embedding column update
+    await client.query("ALTER TABLE legal_document_chunks ALTER COLUMN embedding TYPE vector(768) USING embedding::vector(768);");
 
     // Seed Admin
     const hashedSeedPassword = await argon2.hash("MamuSecure2026!");
@@ -156,13 +178,16 @@ export async function dbInit() {
     }
 
     await client.query("COMMIT");
-    console.log("Database initialized successfully with RLS.");
+    console.log("Database setup successful.");
 
   } catch (err) {
     await client.query("ROLLBACK");
-    console.error("Database initialization failed, transaction rolled back:", err);
+    console.error("Database setup failed, transaction rolled back:", err);
     throw err;
   } finally {
     client.release();
+    pool.end();
   }
 }
+
+setupDb();
