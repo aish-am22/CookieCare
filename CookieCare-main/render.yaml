@@ -1,0 +1,35 @@
+services:
+  - type: pserv
+    name: postgres
+    env: postgres
+    postgres:
+      version: 15
+    disk:
+      name: postgres-data
+      mountPath: /var/lib/postgresql/data
+      sizeGB: 1
+  - type: web
+    name: privlex-ai
+    env: node
+    plan: free
+    buildCommand: |
+      npm install
+      npm run build
+    startCommand: npm run start
+    healthCheckPath: /
+    envVars:
+      - key: DATABASE_URL
+        fromService:
+          type: pserv
+          name: postgres
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: NODE_ENV
+        value: production
+      - key: SENTRY_DSN
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GOOGLE_API_KEY
+        sync: false

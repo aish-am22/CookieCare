@@ -1,0 +1,3075 @@
+// server.ts
+import express from "express";
+import http from "http";
+import path2 from "path";
+import { createServer as createViteServer } from "vite";
+
+// backend/src/config/index.ts
+import dotenv from "dotenv";
+dotenv.config();
+var config = {
+  port: Number(process.env.PORT) || 3e3,
+  nodeEnv: process.env.NODE_ENV || "development",
+  databaseUrl: process.env.DATABASE_URL || "",
+  geminiApiKey: process.env.GEMINI_API_KEY || "",
+  jwtSecret: process.env.JWT_SECRET || "privsec-ai-enterprise-secret-2026",
+  // Fixed: Added the Render production URL as a default fallback
+  corsOrigin: process.env.CORS_ORIGIN || "https://privlex-ai.onrender.com",
+  vercelUrl: process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "",
+  isVercel: !!process.env.VERCEL
+};
+var isProduction = config.nodeEnv === "production";
+
+// backend/src/config/validate.ts
+function validateEnv() {
+  const required = [
+    { key: "DATABASE_URL", value: config.databaseUrl },
+    { key: "GEMINI_API_KEY", value: config.geminiApiKey },
+    { key: "ENCRYPTION_KEY", value: process.env.ENCRYPTION_KEY }
+  ];
+  const missing = required.filter((item) => !item.value || item.value.trim() === "");
+  if (missing.length > 0) {
+    if (process.env.NODE_ENV === "test") {
+      console.warn("\u26A0\uFE0F Skipping env validation in test mode.");
+      return;
+    }
+    console.error("\u274C [FATAL] Missing required environment variables:");
+    missing.forEach((item) => console.error(`   - ${item.key}`));
+    console.error("\nPlease ensure your .env file or environment settings are correct.");
+    process.exit(1);
+  }
+  if (config.geminiApiKey === "dummy") {
+    if (process.env.NODE_ENV === "test") {
+      console.warn("\u26A0\uFE0F Using dummy GEMINI_API_KEY in test mode.");
+    } else {
+      console.error("\u274C [FATAL] GEMINI_API_KEY cannot be 'dummy' in non-test environments.");
+      process.exit(1);
+    }
+  }
+  if (process.env.ENCRYPTION_KEY && Buffer.from(process.env.ENCRYPTION_KEY).length !== 32) {
+    console.error("\u274C [FATAL] ENCRYPTION_KEY must be exactly 32 bytes.");
+    process.exit(1);
+  }
+  console.log("\u2705 Environment validation successful.");
+}
+
+// backend/src/config/sentry.ts
+import * as Sentry from "@sentry/node";
+function initSentry(app2) {
+  if (!process.env.SENTRY_DSN) {
+    console.warn("\u26A0\uFE0F SENTRY_DSN not found. Sentry error tracking is disabled.");
+    return;
+  }
+  Sentry.init({
+    dsn: process.env.SENTRY_DSN,
+    // Performance Monitoring
+    tracesSampleRate: 1
+  });
+}
+function initSentryErrorHandler(app2) {
+  if (process.env.SENTRY_DSN) {
+    Sentry.setupExpressErrorHandler(app2);
+  }
+}
+
+// backend/src/routes/index.ts
+import { Router as Router14 } from "express";
+
+// backend/src/config/database.ts
+import pg from "pg";
+var { Pool } = pg;
+var rawConnectionString = config.databaseUrl.trim();
+var isNeon = rawConnectionString.includes("neon.tech");
+var isPooler = rawConnectionString.includes("-pooler.");
+var connectionString = rawConnectionString;
+if (isNeon) {
+  connectionString = rawConnectionString.replace(/[?&]sslmode=[^&]*/g, "").replace(/[?&]$/, "").replace(/\?$/, "");
+  if (isPooler && !connectionString.includes("pgbouncer=true")) {
+    connectionString += (connectionString.includes("?") ? "&" : "?") + "pgbouncer=true";
+  }
+}
+var pool = new Pool({
+  connectionString,
+  ssl: isNeon ? { rejectUnauthorized: false } : void 0,
+  max: 20,
+  idleTimeoutMillis: 3e4,
+  connectionTimeoutMillis: 6e4,
+  keepAlive: true,
+  keepAliveInitialDelayMillis: 0
+});
+pool.on("error", (err) => {
+  console.error("Unexpected database pool error:", err);
+});
+
+// backend/src/routes/auth.ts
+import { Router } from "express";
+
+// backend/src/controllers/auth.ts
+import argon2 from "argon2";
+import jwt from "jsonwebtoken";
+import crypto from "crypto";
+var register = async (req, res) => {
+  const { email, password, name } = req.body;
+  if (!email || !password || !name) {
+    return res.status(400).json({ error: "Please enter all required fields." });
+  }
+  const normalizedEmail = email.toLowerCase();
+  const newUserId = "user_" + crypto.randomUUID();
+  try {
+    const checkMail = await pool.query("SELECT id FROM users WHERE email = $1", [normalizedEmail]);
+    if (checkMail.rows.length > 0) {
+      return res.status(400).json({ error: "Email already exists." });
+    }
+    const passwordHash = await argon2.hash(password);
+    await pool.query(
+      "INSERT INTO users (id, email, name, password_hash, status, role) VALUES ($1, $2, $3, $4, $5, $6)",
+      [newUserId, normalizedEmail, name, passwordHash, "PENDING_APPROVAL", "USER"]
+    );
+    return res.status(201).json({ message: "Account created successfully. Awaiting administrator approval." });
+  } catch (err) {
+    console.error("Registration failed:", err);
+    return res.status(500).json({ error: "Registration failed." });
+  }
+};
+var login = async (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password) {
+    return res.status(400).json({ error: "Missing identity credentials" });
+  }
+  const normalizedEmail = email.toLowerCase();
+  try {
+    const { rows } = await pool.query(
+      "SELECT id, email, name, password_hash, status, role FROM users WHERE email = $1",
+      [normalizedEmail]
+    ).catch((dbErr) => {
+      console.error("Database query failed during login:", dbErr);
+      throw new Error("DATABASE_ERROR");
+    });
+    if (rows.length > 0) {
+      const user = rows[0];
+      const isPasswordValid = await argon2.verify(user.password_hash, password);
+      if (isPasswordValid) {
+        if (user.status !== "APPROVED") {
+          return res.status(403).json({ error: "Your account is awaiting admin approval." });
+        }
+        const token = jwt.sign(
+          { id: user.id, email: user.email },
+          config.jwtSecret,
+          { expiresIn: "24h" }
+        );
+        return res.json({
+          token,
+          user: {
+            id: user.id,
+            email: user.email,
+            name: user.name,
+            status: user.status,
+            role: user.role
+          }
+        });
+      }
+    }
+  } catch (err) {
+    console.error("Login failed:", err);
+    if (err.message === "DATABASE_ERROR") {
+      return res.status(503).json({ error: "Service temporarily unavailable. Please try again later." });
+    }
+    return res.status(500).json({ error: "Login failed due to an internal server error." });
+  }
+  return res.status(401).json({ error: "Invalid email or password." });
+};
+
+// backend/src/routes/auth.ts
+var router = Router();
+router.post("/register", register);
+router.post("/login", login);
+var auth_default = router;
+
+// backend/src/routes/admin.ts
+import { Router as Router2 } from "express";
+
+// backend/src/middleware/auth.ts
+import jwt2 from "jsonwebtoken";
+var authenticateToken = async (req, res, next) => {
+  const authHeader = req.headers["authorization"];
+  const queryToken = req.query.token;
+  let token;
+  if (authHeader) {
+    const parts = authHeader.split(" ");
+    if (parts.length === 2 && parts[0] === "Bearer") {
+      token = parts[1];
+    } else {
+      return res.status(401).json({ error: "Access denied. Token format must be Bearer <token>." });
+    }
+  } else if (queryToken && typeof queryToken === "string") {
+    token = queryToken;
+  }
+  if (!token) {
+    return res.status(401).json({ error: "Access denied. Token missing." });
+  }
+  if (token === "undefined" || token === "null") {
+    return res.status(401).json({ error: "Access denied. Token is null or undefined." });
+  }
+  try {
+    const decoded = jwt2.verify(token, config.jwtSecret);
+    const { rows } = await pool.query(
+      "SELECT id, email, name, status, role FROM users WHERE id = $1",
+      [decoded.id]
+    );
+    if (rows.length === 0) {
+      return res.status(403).json({ error: "Unauthorized or invalid user session." });
+    }
+    const user = rows[0];
+    if (user.status !== "APPROVED") {
+      return res.status(403).json({ error: "Your account is awaiting admin approval." });
+    }
+    req.user = user;
+    next();
+  } catch (err) {
+    if (err.name === "TokenExpiredError") {
+      return res.status(401).json({ error: "Session expired. Please log in again." });
+    }
+    if (err.name === "JsonWebTokenError") {
+      return res.status(403).json({ error: "Invalid or malformed token." });
+    }
+    console.error("Authentication middleware unexpected error:", err);
+    return res.status(500).json({ error: "Internal server error during authentication." });
+  }
+};
+var isAdmin = (req, res, next) => {
+  if (!req.user || req.user.role !== "ADMIN") {
+    return res.status(403).json({ error: "Access denied. Admins only." });
+  }
+  next();
+};
+
+// backend/src/utils/dbUtils.ts
+async function withTransaction(userId, userRole, fn) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const sanitizedId = userId.replace(/'/g, "''");
+    const sanitizedRole = userRole.replace(/'/g, "''");
+    await client.query(`SET LOCAL app.current_user_id = '${sanitizedId}'`);
+    await client.query(`SET LOCAL app.current_user_role = '${sanitizedRole}'`);
+    const result = await fn(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+// backend/src/controllers/admin.ts
+var approveUser = async (req, res) => {
+  const { userId, role, status } = req.body;
+  const currentUserId = req.user.id;
+  const currentUserRole = req.user.role;
+  if (!userId) {
+    return res.status(400).json({ error: "userId is required." });
+  }
+  try {
+    const finalRole = role || "USER";
+    const finalStatus = status || "APPROVED";
+    await withTransaction(currentUserId, currentUserRole, async (client) => {
+      await client.query(
+        "UPDATE users SET status = $1, role = $2, approved_at = CASE WHEN $1 = 'APPROVED' THEN CURRENT_TIMESTAMP ELSE approved_at END WHERE id = $3",
+        [finalStatus, finalRole, userId]
+      );
+    });
+    res.json({ success: true, message: `User updated to ${finalStatus} with role ${finalRole}.` });
+  } catch (error) {
+    console.error("Admin user update failed:", error);
+    res.status(500).json({ error: "Failed to update user." });
+  }
+};
+var getAllUsers = async (req, res) => {
+  const currentUserId = req.user.id;
+  const currentUserRole = req.user.role;
+  try {
+    const rows = await withTransaction(currentUserId, currentUserRole, async (client) => {
+      const { rows: rows2 } = await client.query(
+        "SELECT id, email, name, status, role, created_at FROM users ORDER BY created_at DESC"
+      );
+      return rows2;
+    });
+    res.json(rows);
+  } catch (err) {
+    console.error("Failed to fetch users:", err);
+    res.status(500).json({ error: "Failed to fetch users." });
+  }
+};
+var getPendingUsers = async (req, res) => {
+  const currentUserId = req.user.id;
+  const currentUserRole = req.user.role;
+  try {
+    const rows = await withTransaction(currentUserId, currentUserRole, async (client) => {
+      const { rows: rows2 } = await client.query(
+        "SELECT id, email, name, status, role, created_at FROM users WHERE status = 'PENDING_APPROVAL' ORDER BY created_at DESC"
+      );
+      return rows2;
+    });
+    res.json(rows);
+  } catch (err) {
+    console.error("Failed to fetch pending users:", err);
+    res.status(500).json({ error: "Failed to fetch pending users." });
+  }
+};
+
+// backend/src/routes/admin.ts
+var router2 = Router2();
+router2.patch("/users/update", authenticateToken, isAdmin, approveUser);
+router2.get("/users", authenticateToken, isAdmin, getAllUsers);
+router2.get("/pending-users", authenticateToken, isAdmin, getPendingUsers);
+var admin_default = router2;
+
+// backend/src/routes/documents.ts
+import { Router as Router3 } from "express";
+
+// backend/src/agents/analysisAgent.ts
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import { z } from "zod";
+var genAI = new GoogleGenerativeAI(config.geminiApiKey || "dummy");
+var AuditSchema = z.object({
+  summary: z.string(),
+  risks: z.array(
+    z.object({
+      id: z.string(),
+      clause: z.string(),
+      severity: z.enum(["low", "medium", "high"]),
+      risk_level: z.string(),
+      reasons: z.array(z.string()),
+      description: z.string(),
+      actionableInsight: z.string(),
+      remediation: z.string().optional()
+    })
+  ),
+  complianceGaps: z.array(
+    z.object({
+      regulation: z.string(),
+      issue: z.string(),
+      severity: z.string(),
+      remediation: z.string()
+    })
+  )
+});
+var AnalysisAgent = class {
+  async analyzeDocuments(contents, prompt) {
+    const combinedContent = contents.join("\n\n---\n\n");
+    const fullPrompt = `
+You are a Senior Compliance Officer.
+
+Analyze the following document(s) and address this query:
+
+${prompt}
+
+[DOCUMENTS]
+${combinedContent}
+
+Identify:
+- Critical liability risks
+- Compliance gaps
+- Regulatory concerns
+- Suggested remediation actions
+
+IMPORTANT:
+Return your response in clean, well-structured Markdown format.
+Use headers, bullet points, and bold text for readability.
+`;
+    try {
+      const model = genAI.getGenerativeModel({
+        model: "gemini-2.0-flash"
+      });
+      const result = await model.generateContent({
+        contents: [
+          {
+            role: "user",
+            parts: [{ text: fullPrompt }]
+          }
+        ]
+      });
+      return result.response.text();
+    } catch (err) {
+      console.error("AnalysisAgent error:", err);
+      throw err;
+    }
+  }
+  async runAudit(content, type) {
+    const systemInstruction = `
+You are a Risk Assessment Agent trained on enterprise liability guidelines.
+
+Audit the document for:
+1. Indemnity Caps
+2. IP Ownership
+3. Termination Rights
+4. Liability Exposure
+5. Compliance Risks
+6. Regulatory Gaps
+
+Audit Type: ${type}
+
+CRITICAL:
+You must return ONLY a valid JSON object matching this schema:
+
+{
+  "summary": "High-level audit summary",
+  "risks": [
+    {
+      "id": "unique_id",
+      "clause": "Specific clause text",
+      "severity": "low | medium | high",
+      "risk_level": "Tier title",
+      "reasons": ["Reason 1", "Reason 2"],
+      "description": "Risk explanation",
+      "actionableInsight": "Recommended action",
+      "remediation": "Balanced replacement wording"
+    }
+  ],
+  "complianceGaps": [
+    {
+      "regulation": "GDPR/CCPA/etc",
+      "issue": "Gap description",
+      "severity": "RED/YELLOW/GREEN",
+      "remediation": "How to resolve"
+    }
+  ]
+}
+`;
+    try {
+      const model = genAI.getGenerativeModel({
+        model: "gemini-2.0-flash"
+      });
+      const result = await model.generateContent({
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: "object",
+            properties: {
+              summary: {
+                type: "string"
+              },
+              risks: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    id: {
+                      type: "string"
+                    },
+                    clause: {
+                      type: "string"
+                    },
+                    severity: {
+                      type: "string",
+                      enum: ["low", "medium", "high"]
+                    },
+                    risk_level: {
+                      type: "string"
+                    },
+                    reasons: {
+                      type: "array",
+                      items: {
+                        type: "string"
+                      }
+                    },
+                    description: {
+                      type: "string"
+                    },
+                    actionableInsight: {
+                      type: "string"
+                    },
+                    remediation: {
+                      type: "string"
+                    }
+                  },
+                  required: [
+                    "id",
+                    "clause",
+                    "severity",
+                    "risk_level",
+                    "reasons",
+                    "description",
+                    "actionableInsight"
+                  ]
+                }
+              },
+              complianceGaps: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    regulation: {
+                      type: "string"
+                    },
+                    issue: {
+                      type: "string"
+                    },
+                    severity: {
+                      type: "string"
+                    },
+                    remediation: {
+                      type: "string"
+                    }
+                  },
+                  required: [
+                    "regulation",
+                    "issue",
+                    "severity",
+                    "remediation"
+                  ]
+                }
+              }
+            },
+            required: ["summary", "risks", "complianceGaps"]
+          }
+        },
+        systemInstruction,
+        contents: [
+          {
+            role: "user",
+            parts: [
+              {
+                text: `Document Content to Audit:
+
+${content}`
+              }
+            ]
+          }
+        ]
+      });
+      let responseText = result.response.text().trim();
+      if (responseText.startsWith("```")) {
+        responseText = responseText.replace(/^```json/i, "").replace(/^```/i, "").replace(/```$/i, "").trim();
+      }
+      const parsed = JSON.parse(responseText);
+      if (parsed.risks && Array.isArray(parsed.risks)) {
+        parsed.risks = parsed.risks.map((risk) => ({
+          ...risk,
+          remediation: risk.remediation || risk.reremediation || "No remediation provided."
+        }));
+      }
+      return AuditSchema.parse(parsed);
+    } catch (err) {
+      console.warn(
+        "AI audit failed or schema validation error. Falling back to heuristics.",
+        err
+      );
+      return this.heuristicAudit(content, type);
+    }
+  }
+  heuristicAudit(content, type) {
+    const risks = [];
+    const lowerContent = content.toLowerCase();
+    if (lowerContent.includes("liquidated damages")) {
+      risks.push({
+        id: "h_risk_1",
+        clause: "Liquidated damages clause detected",
+        severity: "high",
+        risk_level: "CRITICAL",
+        reasons: [
+          "Potential uncapped liability",
+          "May expose parties to excessive penalties"
+        ],
+        description: "Liquidated damages clauses can become punitive if not reasonably linked to actual loss.",
+        actionableInsight: "Negotiate for actual proven damages and establish liability caps.",
+        remediation: "Replace liquidated damages with direct, proven damages subject to an agreed liability cap."
+      });
+    }
+    if (lowerContent.includes("all intellectual property") || lowerContent.includes("exclusive ownership")) {
+      risks.push({
+        id: "h_risk_2",
+        clause: "Broad IP ownership language detected",
+        severity: "medium",
+        risk_level: "IMPORTANT",
+        reasons: [
+          "Potential loss of ownership rights",
+          "Ambiguous IP assignment scope"
+        ],
+        description: "The clause may transfer ownership of pre-existing intellectual property.",
+        actionableInsight: "Clearly distinguish background IP from newly created deliverables.",
+        remediation: "Limit assignment to project deliverables and retain ownership of pre-existing IP."
+      });
+    }
+    if (lowerContent.includes("terminate immediately") && !lowerContent.includes("notice")) {
+      risks.push({
+        id: "h_risk_3",
+        clause: "Immediate termination without notice",
+        severity: "medium",
+        risk_level: "WARNING",
+        reasons: [
+          "No cure period",
+          "Operational disruption risk"
+        ],
+        description: "Immediate termination rights without notice may create business continuity risks.",
+        actionableInsight: "Add notice and cure periods before termination.",
+        remediation: "Require at least 30 days' written notice and a cure period before termination."
+      });
+    }
+    return {
+      summary: `Heuristic audit completed for document type: ${type}.`,
+      risks,
+      complianceGaps: []
+    };
+  }
+};
+
+// backend/src/agents/draftingAgent.ts
+import { GoogleGenerativeAI as GoogleGenerativeAI2 } from "@google/generative-ai";
+var genAI2 = new GoogleGenerativeAI2(config.geminiApiKey || "dummy");
+var DraftingAgent = class {
+  async generateDraft(prompt) {
+    const fullPrompt = `You are an expert Legal Draftsman. Generate a professional legal document based on this instruction: ${prompt}
+
+Return only the document content in Markdown format. Do not include any preamble or notes.`;
+    try {
+      const response = await genAI2.getGenerativeModel({ model: "gemini-2.0-flash" }).generateContent({
+        contents: [{ role: "user", parts: [{ text: fullPrompt }] }]
+      });
+      return response.response.text();
+    } catch (err) {
+      console.error("DraftingAgent error:", err);
+      throw err;
+    }
+  }
+};
+
+// backend/src/agents/negotiationAgent.ts
+import { GoogleGenerativeAI as GoogleGenerativeAI3 } from "@google/generative-ai";
+var genAI3 = new GoogleGenerativeAI3(config.geminiApiKey || "dummy");
+var NegotiationAgent = class {
+  async negotiate(documentContent, playbooks, instructions) {
+    const playbookText = playbooks.join("\n\n---\n\n");
+    const systemInstruction = `You are an expert Legal Counsel specializing in contract negotiation.
+Your goal is to suggest redlines and improvements for the provided document based on the company's playbooks and specific user instructions.
+Return the output in Markdown format with a summary of changes and the proposed redlines.`;
+    const prompt = `[DOCUMENT CONTENT]
+${documentContent}
+
+[NEGOTIATION PLAYBOOKS]
+${playbookText}
+
+[USER INSTRUCTIONS]
+${instructions}
+
+Provide detailed negotiation advice and specific clause redlines.`;
+    try {
+      const result = await genAI3.getGenerativeModel({ model: "gemini-2.0-flash" }).generateContent({
+        generationConfig: {
+          candidateCount: 1
+        },
+        systemInstruction,
+        contents: [{ role: "user", parts: [{ text: prompt }] }]
+      });
+      return result.response.text();
+    } catch (err) {
+      console.error("NegotiationAgent error:", err);
+      throw err;
+    }
+  }
+  async draftRedline(documentContent, playbooks, instructions) {
+    return await this.negotiate(documentContent, playbooks, instructions);
+  }
+};
+
+// backend/src/agents/askLawyerAgent.ts
+import { GoogleGenerativeAI as GoogleGenerativeAI4 } from "@google/generative-ai";
+var genAI4 = new GoogleGenerativeAI4(config.geminiApiKey || "dummy");
+var AskLawyerAgent = class {
+  async getAdvice(prompt, context) {
+    const fullPrompt = `You are a Senior Legal Counsel. Provide professional legal advice based on the following context.
+If the information is not in the context, state that you are advising based on general legal principles but recommend consulting with specific jurisdictional counsel.
+
+[CONTEXT]
+${context}
+
+[USER QUERY]
+${prompt}
+
+IMPORTANT: Return your response in clean Markdown format.`;
+    try {
+      const result = await genAI4.getGenerativeModel({ model: "gemini-2.0-flash" }).generateContent({
+        contents: [{ role: "user", parts: [{ text: fullPrompt }] }]
+      });
+      return result.response.text() || "I cannot answer this query right now.";
+    } catch (err) {
+      console.error("AskLawyerAgent error:", err);
+      throw err;
+    }
+  }
+};
+
+// backend/src/RAG/ragService.ts
+import { GoogleGenerativeAI as GoogleGenerativeAI5 } from "@google/generative-ai";
+
+// backend/src/utils/retry.ts
+async function withRetry(fn, retries = 3, delay = 1e3) {
+  try {
+    return await fn();
+  } catch (error) {
+    if (retries === 0) throw error;
+    const isTransient = error.message?.includes("fetch failed") || error.message?.includes("socket hang up") || error.message?.includes("ECONNRESET") || error.message?.includes("Connection terminated") || error.message?.includes("connection timeout") || error.message?.includes("503") || error.message?.includes("504") || error.message?.includes("429");
+    if (!isTransient) throw error;
+    console.warn(`Retry attempt remaining: ${retries}. Error: ${error.message}`);
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    return withRetry(fn, retries - 1, delay * 2);
+  }
+}
+
+// backend/src/RAG/ragService.ts
+var genAI5 = new GoogleGenerativeAI5(config.geminiApiKey || "dummy");
+function sanitizeText(text) {
+  return text.replace(/\0/g, "");
+}
+function splitIntoClauseAwareChunks(content) {
+  const paragraphs = content.split(/\n\n+/);
+  const chunks = [];
+  let currentChunk = "";
+  const maxChunkLength = 800;
+  const overlapLength = 150;
+  for (const para of paragraphs) {
+    const trimmed = para.trim();
+    if (!trimmed) continue;
+    if ((currentChunk + "\n\n" + trimmed).length <= maxChunkLength) {
+      currentChunk = currentChunk ? currentChunk + "\n\n" + trimmed : trimmed;
+    } else {
+      if (currentChunk) chunks.push(currentChunk);
+      const lastPart = currentChunk.substring(Math.max(0, currentChunk.length - overlapLength));
+      const overlapText = lastPart.includes("\n") ? lastPart.substring(lastPart.indexOf("\n") + 1) : lastPart;
+      currentChunk = overlapText ? overlapText.trim() + "\n\n" + trimmed : trimmed;
+    }
+  }
+  if (currentChunk) {
+    chunks.push(currentChunk);
+  }
+  return chunks.filter((c) => c.trim().length > 15);
+}
+async function embedText(text) {
+  try {
+    const model = genAI5.getGenerativeModel({ model: "text-embedding-004" });
+    const result = await withRetry(() => model.embedContent({
+      content: { role: "user", parts: [{ text: sanitizeText(text) }] }
+    }));
+    const vector = result.embedding?.values || result.embeddings?.[0]?.values;
+    if (!vector) throw new Error("Failed to generate embedding.");
+    return vector;
+  } catch (err) {
+    console.warn("[RAG] embedText failed, continuing without embedding:", err.message);
+    return null;
+  }
+}
+async function chunkAndIndexDocument(fileId, content, userId) {
+  const cleanedContent = sanitizeText(content);
+  const chunks = splitIntoClauseAwareChunks(cleanedContent);
+  const processedChunks = [];
+  for (let i = 0; i < chunks.length; i++) {
+    const vector = await embedText(chunks[i]);
+    processedChunks.push({
+      index: i,
+      content: chunks[i],
+      // null embedding stored as NULL — chunk is still searchable via lexical search
+      embedding: vector ? `[${vector.join(",")}]` : null
+    });
+  }
+  await withTransaction(userId, "USER", async (client) => {
+    for (const chunk of processedChunks) {
+      await client.query(
+        "INSERT INTO legal_document_chunks (file_id, user_id, chunk_index, content, embedding) VALUES ($1, $2, $3, $4, $5)",
+        [fileId, userId, chunk.index, chunk.content, chunk.embedding]
+      );
+    }
+  });
+}
+async function searchHybrid(query, userId, fileIds, folderIds) {
+  const embedding = await embedText(query);
+  const hasEmbedding = embedding !== null;
+  const vectorStr = hasEmbedding ? `[${embedding.join(",")}]` : null;
+  return await withTransaction(userId, "USER", async (client) => {
+    let semanticRows = [];
+    if (hasEmbedding) {
+      let semanticFilterSql = "";
+      const semanticParams = [userId, vectorStr];
+      let sIdx = 3;
+      if (fileIds && fileIds.length > 0) {
+        semanticFilterSql += ` AND file_id = ANY($${sIdx++})`;
+        semanticParams.push(fileIds);
+      }
+      if (folderIds && folderIds.length > 0) {
+        semanticFilterSql += ` AND file_id IN (SELECT id FROM files WHERE folder_id = ANY($${sIdx++}))`;
+        semanticParams.push(folderIds);
+      }
+      const semanticQuerySql = `
+        SELECT id, content, file_id, (SELECT title FROM files WHERE id = file_id) as title
+        FROM legal_document_chunks
+        WHERE user_id = $1
+        ${semanticFilterSql}
+        ORDER BY embedding <=> $2::vector
+        LIMIT 20
+      `;
+      try {
+        const result = await client.query(semanticQuerySql, semanticParams);
+        semanticRows = result.rows;
+      } catch (err) {
+        console.warn("[RAG] Semantic search failed, falling back to lexical only:", err.message);
+      }
+    }
+    let lexicalFilterSql = "";
+    const lexicalParams = [userId, query, `%${query}%`];
+    let lIdx = 4;
+    if (fileIds && fileIds.length > 0) {
+      lexicalFilterSql += ` AND file_id = ANY($${lIdx++})`;
+      lexicalParams.push(fileIds);
+    }
+    if (folderIds && folderIds.length > 0) {
+      lexicalFilterSql += ` AND file_id IN (SELECT id FROM files WHERE folder_id = ANY($${lIdx++}))`;
+      lexicalParams.push(folderIds);
+    }
+    const lexicalQuerySql = `
+      SELECT id, content, file_id, (SELECT title FROM files WHERE id = file_id) as title,
+             ts_rank(to_tsvector('english', content), plainto_tsquery('english', $2)) as fts_rank
+      FROM legal_document_chunks
+      WHERE user_id = $1
+        AND (to_tsvector('english', content) @@ plainto_tsquery('english', $2) OR content ILIKE $3)
+        ${lexicalFilterSql}
+      ORDER BY fts_rank DESC, id
+      LIMIT 20
+    `;
+    const { rows: lexicalRows } = await client.query(lexicalQuerySql, lexicalParams);
+    const rrfMap = /* @__PURE__ */ new Map();
+    semanticRows.forEach((row, index) => {
+      const key = `${row.file_id}_${row.content.substring(0, 50)}`;
+      rrfMap.set(key, { doc: row, semanticRank: index + 1, lexicalRank: Infinity });
+    });
+    lexicalRows.forEach((row, index) => {
+      const key = `${row.file_id}_${row.content.substring(0, 50)}`;
+      if (rrfMap.has(key)) {
+        rrfMap.get(key).lexicalRank = index + 1;
+      } else {
+        rrfMap.set(key, { doc: row, semanticRank: Infinity, lexicalRank: index + 1 });
+      }
+    });
+    const fusedResults = Array.from(rrfMap.values()).map((item) => {
+      const semScore = item.semanticRank === Infinity ? 0 : 1 / (60 + item.semanticRank);
+      const lexScore = item.lexicalRank === Infinity ? 0 : 1 / (60 + item.lexicalRank);
+      const rrfScore = semScore * 0.7 + lexScore * 0.3;
+      return {
+        ...item.doc,
+        rrfScore
+      };
+    });
+    fusedResults.sort((a, b) => b.rrfScore - a.rrfScore);
+    return fusedResults.slice(0, 5);
+  });
+}
+
+// backend/src/agents/legalAgent.ts
+import { GoogleGenerativeAI as GoogleGenerativeAI6 } from "@google/generative-ai";
+var genAI6 = new GoogleGenerativeAI6(config.geminiApiKey || "dummy");
+var AgentOrchestrator = class {
+  constructor() {
+    this.analysisAgent = new AnalysisAgent();
+    this.draftingAgent = new DraftingAgent();
+    this.negotiationAgent = new NegotiationAgent();
+    this.askLawyerAgent = new AskLawyerAgent();
+  }
+  async runAnalysis(documentId, content, userId, folderIds, userRole = "USER") {
+    const audit = await this.analysisAgent.runAudit(content, "legal");
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SET LOCAL app.current_user_id = $1", [userId]);
+      await client.query("SET LOCAL app.current_user_role = $2", [userRole]);
+      await client.query(
+        "UPDATE files SET analysis = $1 WHERE id = $2",
+        [JSON.stringify(audit), documentId]
+      );
+      await client.query(
+        "INSERT INTO agent_execution_logs (file_id, user_id, agent_name, task_name, decisions, confidence_score) VALUES ($1, $2, $3, $4, $5, $6)",
+        [documentId, userId, "AnalysisAgent", "Legal Audit", JSON.stringify({ summary: audit.summary }), 95]
+      );
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+    return audit;
+  }
+  async runDrafting(params) {
+    const prompt = `Mode: ${params.mode}, Level: ${params.detailLevel}, Instructions: ${params.instructions}`;
+    return await this.draftingAgent.generateDraft(prompt);
+  }
+  async runNegotiation(documentContent, playbooks, instructions) {
+    return await this.negotiationAgent.negotiate(documentContent, playbooks, instructions);
+  }
+  async askLawyer(prompt, userId, documentIds) {
+    const context = await searchHybrid(prompt, userId, documentIds);
+    const contextText = context.map((c) => `[Source: ${c.title}]
+${c.content}`).join("\n\n");
+    return await this.askLawyerAgent.getAdvice(prompt, contextText);
+  }
+  async remediate(documentId, content, userId, userRole = "USER") {
+    return await this.runAnalysis(documentId, content, userId, void 0, userRole);
+  }
+  async interactAnalyze(folderIds, prompt, userId, documentMode, answerStyle, history, folderId, userRole = "USER") {
+    const context = await searchHybrid(prompt, userId, void 0, folderIds);
+    const contextText = context.map((c) => `[File: ${c.title}]
+${c.content}`).join("\n\n");
+    const fullPrompt = `You are a Legal Analyst. Answer the following query based on the provided document context.
+Answer Style: ${answerStyle}
+History: ${JSON.stringify(history)}
+
+[CONTEXT]
+${contextText}
+
+[QUERY]
+${prompt}`;
+    try {
+      const result = await genAI6.getGenerativeModel({ model: "gemini-2.0-flash" }).generateContent({
+        contents: [{ role: "user", parts: [{ text: fullPrompt }] }]
+      });
+      return result.response.text();
+    } catch (err) {
+      console.error("interactAnalyze error:", err);
+      throw err;
+    }
+  }
+};
+
+// backend/src/services/scannerService.ts
+import fs from "fs/promises";
+import path from "path";
+import { fileURLToPath } from "url";
+
+// backend/src/utils/browserManager.ts
+import { chromium } from "playwright";
+var BrowserManager = class _BrowserManager {
+  constructor() {
+    this.browser = null;
+    this.launchPromise = null;
+    // Track whether we're using a remote endpoint or local launch
+    this.usingRemote = false;
+  }
+  static getInstance() {
+    if (!_BrowserManager.instance) {
+      _BrowserManager.instance = new _BrowserManager();
+    }
+    return _BrowserManager.instance;
+  }
+  async launchLocal() {
+    console.log("[BrowserManager] Launching local Chromium browser.");
+    const browser = await chromium.launch({
+      headless: true,
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu"
+      ]
+    });
+    this.usingRemote = false;
+    return browser;
+  }
+  async connectRemote(endpoint) {
+    console.log("[BrowserManager] Connecting to remote browser endpoint.");
+    const browser = await chromium.connectOverCDP(endpoint);
+    this.usingRemote = true;
+    return browser;
+  }
+  async getBrowser() {
+    if (this.browser && this.browser.isConnected()) {
+      return this.browser;
+    }
+    if (this.launchPromise) {
+      return this.launchPromise;
+    }
+    const endpoint = process.env.BROWSER_ENDPOINT;
+    this.launchPromise = (async () => {
+      let browser;
+      if (endpoint && !endpoint.includes("YOUR_TOKEN_HERE")) {
+        try {
+          browser = await this.connectRemote(endpoint);
+        } catch (remoteErr) {
+          console.warn("[BrowserManager] Remote browser failed, falling back to local launch:", remoteErr.message);
+          browser = await this.launchLocal();
+        }
+      } else {
+        browser = await this.launchLocal();
+      }
+      this.browser = browser;
+      this.launchPromise = null;
+      browser.on("disconnected", () => {
+        console.warn("[BrowserManager] Browser disconnected. Will relaunch on next request.");
+        this.browser = null;
+      });
+      return browser;
+    })().catch((err) => {
+      this.launchPromise = null;
+      console.error("[BrowserManager] Failed to start browser:", err);
+      throw err;
+    });
+    return this.launchPromise;
+  }
+  /**
+   * Creates a new browser context. Automatically reconnects if the browser
+   * has gone away since the last call.
+   */
+  async newContext(options) {
+    let browser;
+    try {
+      browser = await this.getBrowser();
+    } catch (err) {
+      this.browser = null;
+      this.launchPromise = null;
+      browser = await this.getBrowser();
+    }
+    if (!browser.isConnected()) {
+      this.browser = null;
+      browser = await this.launchLocal();
+      this.browser = browser;
+      browser.on("disconnected", () => {
+        console.warn("[BrowserManager] Browser disconnected. Will relaunch on next request.");
+        this.browser = null;
+      });
+    }
+    const context = await browser.newContext({
+      // Reasonable defaults to avoid detection and reduce resource usage
+      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+      ignoreHTTPSErrors: true,
+      ...options
+    });
+    if (options?.optimizeForScanning) {
+      await context.route("**/*", (route) => {
+        const resourceType = route.request().resourceType();
+        if (["image", "font", "media"].includes(resourceType)) {
+          return route.abort();
+        }
+        return route.continue();
+      });
+    }
+    return context;
+  }
+  async newPage(options) {
+    const context = await this.newContext(options);
+    return context.newPage();
+  }
+  async cleanup() {
+    if (this.browser) {
+      try {
+        await this.browser.close();
+      } catch (_) {
+      }
+      this.browser = null;
+    }
+  }
+};
+var browserManager = BrowserManager.getInstance();
+
+// backend/src/services/scannerService.ts
+import { GoogleGenerativeAI as GoogleGenerativeAI7 } from "@google/generative-ai";
+var __dirname = path.dirname(fileURLToPath(import.meta.url));
+var ScannerService = class {
+  constructor() {
+    this.cookieDb = null;
+    this.genAI = new GoogleGenerativeAI7(config.geminiApiKey || "dummy");
+  }
+  async loadCookieDb() {
+    if (this.cookieDb) return this.cookieDb;
+    try {
+      const isProd = process.env.NODE_ENV === "production";
+      const dbPath = isProd ? path.resolve(process.cwd(), "dist/backend/src/config/open-cookie-database.json") : path.resolve(__dirname, "../config/open-cookie-database.json");
+      const data = await fs.readFile(dbPath, "utf-8");
+      this.cookieDb = JSON.parse(data);
+      return this.cookieDb;
+    } catch (err) {
+      console.error("Failed to load cookie database:", err);
+      return {};
+    }
+  }
+  validateUrl(url) {
+    try {
+      const parsed = new URL(url);
+      const hostname = parsed.hostname.toLowerCase();
+      const blockedHosts = [
+        "localhost",
+        "127.0.0.1",
+        "0.0.0.0",
+        "169.254.169.254",
+        "::1",
+        "::ffff:127.0.0.1",
+        "localhost.localdomain"
+      ];
+      if (blockedHosts.includes(hostname)) {
+        return { valid: false, reason: `Blocked hostname: ${hostname}` };
+      }
+      const privateIPPatterns = [
+        /^10\./,
+        /^172\.(1[6-9]|2[0-9]|3[01])\./,
+        /^192\.168\./,
+        /^127\./,
+        /^169\.254\./,
+        /^fc[0-9a-f]{2}:/i,
+        /^fe[89ab][0-9a-f]:/i
+      ];
+      for (const pattern of privateIPPatterns) {
+        if (pattern.test(hostname)) {
+          return { valid: false, reason: `Private IP range blocked: ${hostname}` };
+        }
+      }
+      const blockedPorts = ["25", "587", "465"];
+      if (blockedPorts.includes(parsed.port)) {
+        return { valid: false, reason: `Blocked port: ${parsed.port}` };
+      }
+      return { valid: true };
+    } catch (err) {
+      return { valid: false, reason: `Invalid URL format: ${err.message}` };
+    }
+  }
+  async handleConsentBanner(page, action) {
+    const acceptSelectors = [
+      "#onetrust-accept-btn-handler",
+      "#wt-cli-accept-all-btn",
+      "#accept-cookies",
+      'button:has-text("Accept All")',
+      'button:has-text("Allow All")',
+      'button:has-text("I Accept")',
+      'button:has-text("Agree")',
+      '[aria-label*="Accept all"]',
+      ".js-accept-all"
+    ];
+    const rejectSelectors = [
+      "#onetrust-reject-all-handler",
+      "#wt-cli-reject-all-btn",
+      'button:has-text("Reject All")',
+      'button:has-text("Decline All")',
+      'button:has-text("Only Necessary")',
+      'button:has-text("Dismiss")',
+      '[aria-label*="Reject all"]',
+      ".js-reject-all"
+    ];
+    const selectors = action === "accept" ? acceptSelectors : rejectSelectors;
+    for (const selector of selectors) {
+      try {
+        const button = page.locator(selector).first();
+        if (await button.isVisible({ timeout: 2e3 })) {
+          await button.click();
+          await page.waitForLoadState("networkidle", { timeout: 5e3 }).catch(() => {
+          });
+          return true;
+        }
+      } catch (e) {
+      }
+    }
+    return false;
+  }
+  async capturePageState(page) {
+    const cdp = await page.context().newCDPSession(page);
+    const { cookies } = await cdp.send("Network.getAllCookies");
+    await cdp.detach();
+    const storage = await page.evaluate(() => {
+      return {
+        localStorage: { ...localStorage },
+        sessionStorage: { ...sessionStorage }
+      };
+    });
+    return { cookies, storage };
+  }
+  async discoverUrls(rootUrl, limit = 20) {
+    const urls = /* @__PURE__ */ new Set([rootUrl]);
+    const domain = new URL(rootUrl).hostname;
+    const sitemapUrl = new URL("/sitemap.xml", rootUrl).toString();
+    if (this.validateUrl(sitemapUrl).valid) {
+      try {
+        const resp = await fetch(sitemapUrl, { signal: AbortSignal.timeout(5e3) });
+        if (resp.ok) {
+          const text = await resp.text();
+          const matches = text.match(/<loc>(.*?)<\/loc>/g);
+          if (matches) {
+            for (const m of matches) {
+              const loc = m.replace(/<\/?loc>/g, "").trim();
+              if (loc && urls.size < limit) {
+                try {
+                  const u = new URL(loc);
+                  if (u.hostname === domain) urls.add(loc);
+                } catch (e) {
+                }
+              }
+            }
+          }
+        }
+      } catch (e) {
+      }
+    }
+    if (urls.size >= limit) return Array.from(urls).slice(0, limit);
+    let context;
+    try {
+      context = await browserManager.newContext({ optimizeForScanning: true });
+      const page = await context.newPage();
+      try {
+        await page.goto(rootUrl, { waitUntil: "domcontentloaded", timeout: 15e3 });
+        const links = await page.evaluate((domain2) => {
+          return Array.from(document.querySelectorAll("a")).map((a) => a.href).filter((href) => {
+            try {
+              const u = new URL(href);
+              return u.hostname === domain2 && (u.protocol === "http:" || u.protocol === "https:") && !u.hash;
+            } catch (e) {
+              return false;
+            }
+          });
+        }, domain);
+        for (const link of links) {
+          if (urls.size >= limit) break;
+          if (this.validateUrl(link).valid) {
+            urls.add(link);
+          }
+        }
+      } catch (e) {
+        console.warn("[Scanner] discoverUrls page navigation failed, continuing with root URL only:", e.message);
+      } finally {
+        await page.close().catch(() => {
+        });
+      }
+    } catch (e) {
+      console.warn("[Scanner] discoverUrls browser context failed, continuing with root URL only:", e.message);
+    } finally {
+      if (context) await context.close().catch(() => {
+      });
+    }
+    return Array.from(urls).slice(0, limit);
+  }
+  async analyzeTrackersWithAI(trackers, url) {
+    const trackerSummary = trackers.map((t) => ({
+      name: t.name,
+      domain: t.domain,
+      description: t.description,
+      currentCategory: t.category
+    }));
+    const prompt = `You are a Privacy Engineer. Analyze the following trackers detected on ${url} and categorize them into: 'Necessary', 'Functional', 'Analytics', or 'Marketing'.
+Also, identify potential compliance risks and provide remediation steps.
+
+[TRACKERS]
+${JSON.stringify(trackerSummary, null, 2)}
+
+CRITICAL: Return a valid JSON object matching this schema:
+{
+  "categorizedTrackers": [
+    {
+      "name": "string",
+      "category": "Necessary | Functional | Analytics | Marketing",
+      "riskLevel": "LOW | MEDIUM | HIGH",
+      "explanation": "string",
+      "remediation": "string"
+    }
+  ],
+  "overallComplianceRating": "A | B | C | D | F",
+  "summary": "string"
+}`;
+    try {
+      const model = this.genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+      const result = await model.generateContent({
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        generationConfig: { responseMimeType: "application/json" }
+      });
+      return JSON.parse(result.response.text());
+    } catch (err) {
+      console.error("[Scanner] AI analysis failed:", err);
+      return null;
+    }
+  }
+  async scanCookie(url, userId, scanDepth = "Deep") {
+    try {
+      const targetUrl = url.startsWith("http") ? url : `https://${url}`;
+      const urlValidation = this.validateUrl(targetUrl);
+      if (!urlValidation.valid) {
+        return {
+          scanSummary: {
+            url: targetUrl,
+            level: scanDepth,
+            overallScore: 0,
+            riskLevel: "ERROR",
+            error: `URL validation failed: ${urlValidation.reason}`,
+            scannedAt: (/* @__PURE__ */ new Date()).toISOString()
+          },
+          cookiesDetected: [],
+          complianceGaps: [
+            {
+              regulation: "SSRF_PROTECTION",
+              severity: "RED",
+              issue: `Blocked attempt to scan internal/private domain: ${urlValidation.reason}`,
+              remediation: "Only scan public URLs (e.g., https://example.com)."
+            }
+          ]
+        };
+      }
+      const depthLimit = scanDepth === "Lite" ? 1 : scanDepth === "Medium" ? 5 : scanDepth === "Enterprise" ? 15 : 10;
+      const urlsToScan = scanDepth === "Lite" ? [targetUrl] : await this.discoverUrls(targetUrl, depthLimit);
+      const globalAggregatedCookies = /* @__PURE__ */ new Map();
+      const globalAggregatedStorage = { localStorage: {}, sessionStorage: {} };
+      let hasConsentBannerGlobal = false;
+      const preConsentCookiesGlobal = /* @__PURE__ */ new Map();
+      for (const currentUrl of urlsToScan) {
+        let preContext;
+        try {
+          preContext = await browserManager.newContext({ optimizeForScanning: true });
+          const prePage = await preContext.newPage();
+          try {
+            await prePage.goto(currentUrl, { waitUntil: "networkidle", timeout: 3e4 });
+            const preState = await this.capturePageState(prePage);
+            preState.cookies.forEach((c) => {
+              preConsentCookiesGlobal.set(c.name, c);
+              globalAggregatedCookies.set(c.name, c);
+            });
+            Object.assign(globalAggregatedStorage.localStorage, preState.storage.localStorage);
+          } catch (e) {
+            console.error(`[Scanner] Pre-consent capture failed for ${currentUrl}:`, e.message);
+          } finally {
+            await prePage.close().catch(() => {
+            });
+          }
+        } catch (e) {
+          console.error(`[Scanner] Pre-consent context failed for ${currentUrl}:`, e.message);
+        } finally {
+          if (preContext) await preContext.close().catch(() => {
+          });
+        }
+      }
+      for (let i = 0; i < urlsToScan.length; i++) {
+        const currentUrl = urlsToScan[i];
+        const isRoot = i === 0;
+        let rejectContext;
+        try {
+          rejectContext = await browserManager.newContext({ optimizeForScanning: true });
+          const rejectPage = await rejectContext.newPage();
+          try {
+            await rejectPage.goto(currentUrl, { waitUntil: "networkidle", timeout: 3e4 });
+            if (isRoot) {
+              const rejected = await this.handleConsentBanner(rejectPage, "reject");
+              if (rejected) hasConsentBannerGlobal = true;
+            }
+            const postRejectState = await this.capturePageState(rejectPage);
+            postRejectState.cookies.forEach((c) => globalAggregatedCookies.set(c.name, c));
+          } catch (e) {
+            console.error(`[Scanner] Reject flow failed for ${currentUrl}:`, e.message);
+          } finally {
+            await rejectPage.close().catch(() => {
+            });
+          }
+        } catch (e) {
+          console.error(`[Scanner] Reject context failed for ${currentUrl}:`, e.message);
+        } finally {
+          if (rejectContext) await rejectContext.close().catch(() => {
+          });
+        }
+        let acceptContext;
+        try {
+          acceptContext = await browserManager.newContext({ optimizeForScanning: true });
+          const acceptPage = await acceptContext.newPage();
+          try {
+            await acceptPage.goto(currentUrl, { waitUntil: "networkidle", timeout: 3e4 });
+            if (isRoot) {
+              const accepted = await this.handleConsentBanner(acceptPage, "accept");
+              if (accepted) hasConsentBannerGlobal = true;
+            }
+            const postAcceptState = await this.capturePageState(acceptPage);
+            postAcceptState.cookies.forEach((c) => globalAggregatedCookies.set(c.name, c));
+            Object.assign(globalAggregatedStorage.localStorage, postAcceptState.storage.localStorage);
+          } catch (e) {
+            console.error(`[Scanner] Accept flow failed for ${currentUrl}:`, e.message);
+          } finally {
+            await acceptPage.close().catch(() => {
+            });
+          }
+        } catch (e) {
+          console.error(`[Scanner] Accept context failed for ${currentUrl}:`, e.message);
+        } finally {
+          if (acceptContext) await acceptContext.close().catch(() => {
+          });
+        }
+      }
+      const allCookies = Array.from(globalAggregatedCookies.values());
+      const db = await this.loadCookieDb();
+      const detectedCookies = [];
+      for (const cookie of allCookies) {
+        let matched = false;
+        for (const [provider, cookies] of Object.entries(db)) {
+          const match = cookies.find((c) => c.cookie?.toLowerCase() === cookie.name.toLowerCase());
+          if (match) {
+            detectedCookies.push({
+              name: cookie.name,
+              category: match.category,
+              domain: provider,
+              description: match.description,
+              retention: match.retentionPeriod || "Persistent",
+              severity: match.category === "Marketing" || match.category === "Analytics" ? "HIGH" : "LOW"
+            });
+            matched = true;
+            break;
+          }
+        }
+        if (!matched) {
+          detectedCookies.push({
+            name: cookie.name,
+            category: "Unclassified",
+            domain: cookie.domain,
+            description: "Dynamic JavaScript-set tracker detected via CDP.",
+            retention: "Session",
+            severity: "MEDIUM"
+          });
+        }
+      }
+      const aiAnalysis = await this.analyzeTrackersWithAI(detectedCookies, targetUrl);
+      if (aiAnalysis) {
+        detectedCookies.forEach((cookie) => {
+          const aiMatch = aiAnalysis.categorizedTrackers.find((t) => t.name === cookie.name);
+          if (aiMatch) {
+            cookie.category = aiMatch.category;
+            cookie.severity = aiMatch.riskLevel;
+            cookie.description = aiMatch.explanation;
+            cookie.remediation = aiMatch.remediation;
+          }
+        });
+      }
+      const highRiskCount = detectedCookies.filter((c) => c.severity === "HIGH").length;
+      const baseScore = aiAnalysis ? aiAnalysis.overallComplianceRating === "A" ? 95 : aiAnalysis.overallComplianceRating === "B" ? 80 : aiAnalysis.overallComplianceRating === "C" ? 60 : 40 : 100;
+      const score = Math.max(0, baseScore - highRiskCount * 5 - detectedCookies.length * 1);
+      const risk = score > 75 ? "Low" : score > 45 ? "Medium" : "High";
+      const result = {
+        scanSummary: {
+          url: targetUrl,
+          level: scanDepth,
+          overallScore: score,
+          riskLevel: risk,
+          hasConsentBanner: hasConsentBannerGlobal,
+          loadsBeforeConsent: preConsentCookiesGlobal.size > 0,
+          totalCookiesCount: detectedCookies.length,
+          scannedAt: (/* @__PURE__ */ new Date()).toISOString(),
+          pagesScanned: urlsToScan.length,
+          aiSummary: aiAnalysis?.summary,
+          storageDetected: globalAggregatedStorage
+        },
+        cookiesDetected: detectedCookies,
+        complianceGaps: [
+          {
+            regulation: "GDPR",
+            severity: preConsentCookiesGlobal.size > 0 ? "RED" : "GREEN",
+            issue: "Trackers firing before user consent across scanned pages.",
+            remediation: "Implement a strict 'hold-back' mechanism for all non-essential scripts until explicit consent is given."
+          },
+          {
+            regulation: "Cookie Law",
+            severity: !hasConsentBannerGlobal ? "RED" : "GREEN",
+            issue: !hasConsentBannerGlobal ? "No visible cookie consent banner detected." : "Consent banner present.",
+            remediation: "Deploy a compliant CMP (Consent Management Platform) to manage user preferences."
+          }
+        ]
+      };
+      await this.saveScanResult(userId, url, "cookie", score, risk, result);
+      return result;
+    } catch (err) {
+      console.error("3-Stage Cookie scan failed:", err);
+      return {
+        scanSummary: { url, level: scanDepth, overallScore: 0, riskLevel: "ERROR", error: err.message },
+        cookiesDetected: [],
+        complianceGaps: [{ regulation: "SCAN_ERROR", severity: "RED", issue: err.message, remediation: "Check destination endpoint." }]
+      };
+    }
+  }
+  async scanVulnerability(url, userId) {
+    const findings = [];
+    try {
+      const targetUrl = url.startsWith("http") ? url : `https://${url}`;
+      const urlValidation = this.validateUrl(targetUrl);
+      if (!urlValidation.valid) {
+        return {
+          overallRisk: "HIGH",
+          securityScore: 0,
+          findings: [
+            {
+              name: "SSRF Protection",
+              vector: `Blocked target: ${urlValidation.reason}`,
+              severity: "HIGH",
+              remediation: "Scan a publicly accessible HTTP or HTTPS URL."
+            }
+          ]
+        };
+      }
+      const response = await fetch(targetUrl, { method: "GET" });
+      const headers = response.headers;
+      if (!headers.get("content-security-policy")) {
+        findings.push({
+          name: "Missing Content-Security-Policy",
+          vector: "HTTP response headers",
+          severity: "HIGH",
+          remediation: "Add a Content-Security-Policy response header that only permits trusted content sources."
+        });
+      }
+      if (!headers.get("strict-transport-security")) {
+        findings.push({
+          name: "Missing Strict-Transport-Security",
+          vector: "HTTPS response headers",
+          severity: "MEDIUM",
+          remediation: "Add Strict-Transport-Security with an appropriate max-age and includeSubDomains policy."
+        });
+      }
+      if (!headers.get("x-content-type-options") || headers.get("x-content-type-options")?.toLowerCase() !== "nosniff") {
+        findings.push({
+          name: "Missing X-Content-Type-Options",
+          vector: "HTTP response headers",
+          severity: "LOW",
+          remediation: "Set the X-Content-Type-Options response header to nosniff."
+        });
+      }
+      const score = Math.max(0, 100 - findings.length * 20);
+      const risk = score > 80 ? "LOW" : score > 50 ? "MEDIUM" : "HIGH";
+      const result = {
+        overallRisk: risk,
+        securityScore: score,
+        findings
+      };
+      await this.saveScanResult(userId, url, "vulnerability", score, risk, result);
+      return result;
+    } catch (err) {
+      console.error("Vulnerability endpoint scan failed:", err);
+      throw err;
+    }
+  }
+  async saveScanResult(userId, url, type, score, risk, payload) {
+    await withTransaction(userId, "USER", async (client) => {
+      await client.query(
+        "INSERT INTO website_scans (user_id, url, scan_type, overall_score, risk_level, payload) VALUES ($1, $2, $3, $4, $5, $6)",
+        [userId, url, type, score, risk, JSON.stringify(payload)]
+      );
+    });
+  }
+};
+
+// backend/src/utils/crypto.ts
+import crypto2 from "crypto";
+var ENCRYPTION_KEY = process.env.ENCRYPTION_KEY;
+var ALGORITHM = "aes-256-gcm";
+if (!ENCRYPTION_KEY || Buffer.from(ENCRYPTION_KEY).length !== 32) {
+  console.warn("\u26A0\uFE0F [SECURITY] ENCRYPTION_KEY is missing or invalid (must be 32 bytes). Encryption/Decryption features will fail.");
+}
+function encryptData(text) {
+  if (!text) return "";
+  if (!ENCRYPTION_KEY || Buffer.from(ENCRYPTION_KEY).length !== 32) {
+    throw new Error("ENCRYPTION_KEY must be 32 bytes.");
+  }
+  const iv = crypto2.randomBytes(12);
+  const cipher = crypto2.createCipheriv(ALGORITHM, Buffer.from(ENCRYPTION_KEY), iv);
+  let encrypted = cipher.update(text, "utf8", "hex");
+  encrypted += cipher.final("hex");
+  const authTag = cipher.getAuthTag().toString("hex");
+  return `LEXGCM_${iv.toString("hex")}:${authTag}:${encrypted}`;
+}
+function decryptData(text) {
+  if (!text) return "";
+  if (text.startsWith("LEXGCM_")) {
+    try {
+      if (!ENCRYPTION_KEY || Buffer.from(ENCRYPTION_KEY).length !== 32) {
+        throw new Error("ENCRYPTION_KEY must be 32 bytes.");
+      }
+      const payload = text.replace("LEXGCM_", "");
+      const [ivHex, authTagHex, encryptedHex] = payload.split(":");
+      if (!ivHex || !authTagHex || !encryptedHex) {
+        return "[DECRYPTION_FORMAT_ERROR]";
+      }
+      const iv = Buffer.from(ivHex, "hex");
+      const authTag = Buffer.from(authTagHex, "hex");
+      const decipher = crypto2.createDecipheriv(ALGORITHM, Buffer.from(ENCRYPTION_KEY), iv);
+      decipher.setAuthTag(authTag);
+      let decrypted = decipher.update(encryptedHex, "hex", "utf8");
+      decrypted += decipher.final("utf8");
+      return decrypted;
+    } catch (err) {
+      console.error("Decryption failed:", err);
+      (async () => {
+        let client;
+        try {
+          client = await pool.connect();
+          await client.query("BEGIN");
+          await client.query("SET LOCAL app.current_user_role = 'ADMIN'");
+          await client.query(`
+            INSERT INTO compliance_audit_logs (user_id, action_type, metadata)
+            VALUES ($1, $2, $3)
+          `, [null, "decryption_failure", JSON.stringify({ error: err.message, timestamp: (/* @__PURE__ */ new Date()).toISOString() })]);
+          await client.query("COMMIT");
+        } catch (auditErr) {
+          if (client) {
+            try {
+              await client.query("ROLLBACK");
+            } catch (rollbackErr) {
+            }
+          }
+          console.error("Failed to log decryption failure audit:", auditErr);
+        } finally {
+          if (client) client.release();
+        }
+      })();
+      return "[DECRYPTION_FAILURE]";
+    }
+  }
+  if (text.startsWith("LEXENC_")) {
+    try {
+      const rawBase64 = text.replace("LEXENC_", "");
+      return Buffer.from(rawBase64, "base64").toString("utf-8");
+    } catch (err) {
+      return "[LEGACY_DECRYPTION_ERROR]";
+    }
+  }
+  return text;
+}
+var encrypt = encryptData;
+var decrypt = decryptData;
+
+// backend/src/services/jobQueue.ts
+import { GoogleGenerativeAI as GoogleGenerativeAI8 } from "@google/generative-ai";
+import crypto3 from "crypto";
+import pdf from "pdf-parse-fork";
+import mammoth from "mammoth";
+var genAI7 = new GoogleGenerativeAI8(process.env.GEMINI_API_KEY || "");
+async function updateJobProgress(jobId, userId, progress, message) {
+  await withTransaction(userId, "USER", async (client) => {
+    await client.query(
+      "UPDATE jobs SET progress = $1, message = $2 WHERE id = $3",
+      [progress, message, jobId]
+    );
+  });
+  jobRegistry.broadcast(userId, { id: jobId, progress, message });
+}
+async function updateJobState(jobId, userId, updates) {
+  const columnMap = {
+    userId: "user_id",
+    createdAt: "created_at",
+    completedAt: "completed_at"
+    // result, error, status, progress, message, type all match DB column names directly
+  };
+  const fields = Object.keys(updates).map((k, i) => `${columnMap[k] ?? k} = $${i + 1}`).join(", ");
+  const values = Object.values(updates).map(
+    (v) => v !== null && typeof v === "object" ? JSON.stringify(v) : v
+  );
+  await withTransaction(userId, "USER", async (client) => {
+    await client.query(
+      `UPDATE jobs SET ${fields} WHERE id = $${values.length + 1}`,
+      [...values, jobId]
+    );
+  });
+}
+async function addJobToQueue(userId, type, payload) {
+  const jobId = crypto3.randomUUID();
+  await withTransaction(userId, "USER", async (client) => {
+    await client.query(
+      `INSERT INTO jobs (id, user_id, type, status, progress, payload)
+       VALUES ($1, $2, $3, 'queued', 0, $4)`,
+      [jobId, userId, type, JSON.stringify(payload)]
+    );
+  });
+  (async () => {
+    try {
+      await updateJobState(jobId, userId, { status: "processing", progress: 5 });
+      jobRegistry.broadcast(userId, { id: jobId, status: "processing", progress: 5 });
+      let result;
+      switch (type) {
+        case "file_processing":
+          result = await executeFileProcessing(jobId, userId, payload);
+          break;
+        case "document_analysis":
+          result = await executeDocumentAnalysis(jobId, userId, payload);
+          break;
+        case "privacy_scanning":
+          result = await executePrivacyScanning(jobId, userId, payload);
+          break;
+        case "vulnerability_scanning":
+          result = await executeVulnerabilityScanning(jobId, userId, payload);
+          break;
+        case "template_drafting":
+          result = await executeTemplateDrafting(jobId, userId, payload);
+          break;
+        default:
+          throw new Error(`Unhandled job type: ${type}`);
+      }
+      await updateJobState(jobId, userId, {
+        status: "completed",
+        progress: 100,
+        result: JSON.stringify(result)
+      });
+      jobRegistry.broadcast(userId, {
+        id: jobId,
+        userId,
+        status: "completed",
+        progress: 100,
+        result
+      });
+    } catch (err) {
+      console.error(`[JobRunner] Job ${jobId} failed:`, err);
+      jobRegistry.broadcast(userId, {
+        id: jobId,
+        userId,
+        status: "failed",
+        error: err.message
+      });
+      await updateJobState(jobId, userId, {
+        status: "failed",
+        error: err.message
+      }).catch((dbErr) => console.error(`[JobRunner] Failed to persist error state for job ${jobId}:`, dbErr));
+    }
+  })();
+  return { id: jobId };
+}
+var BackgroundJobRegistry = class {
+  constructor() {
+    this.clients = /* @__PURE__ */ new Set();
+    this.orchestrator = new AgentOrchestrator();
+    this.scanner = new ScannerService();
+  }
+  broadcast(userId, job) {
+    const payloadStr = JSON.stringify({ event: "job_update", job });
+    for (const client of this.clients) {
+      if (client.userId === userId) {
+        client.send(`data: ${payloadStr}
+
+`);
+      }
+    }
+  }
+  addClient(userId, res) {
+    const id = "client_" + crypto3.randomUUID();
+    res.write(`data: ${JSON.stringify({ event: "ping", timestamp: (/* @__PURE__ */ new Date()).toISOString() })}
+
+`);
+    const heartbeatInterval = setInterval(() => {
+      try {
+        res.write(`:ping
+
+`);
+      } catch (err) {
+        clearInterval(heartbeatInterval);
+      }
+    }, 15e3);
+    const client = {
+      id,
+      userId,
+      send: (data) => {
+        try {
+          res.write(data);
+        } catch (err) {
+          console.warn("[JobRegistry SSE] Failed to push data for client:", id);
+        }
+      }
+    };
+    this.clients.add(client);
+    return id;
+  }
+  removeClient(id) {
+    for (const client of this.clients) {
+      if (client.id === id) {
+        this.clients.delete(client);
+        break;
+      }
+    }
+  }
+  async getJob(id) {
+    const { rows } = await pool.query("SELECT * FROM jobs WHERE id = $1", [id]);
+    if (rows.length === 0) return null;
+    return this.mapDbJobToJob(rows[0]);
+  }
+  async getUserJobs(userId) {
+    const { rows } = await pool.query(
+      "SELECT * FROM jobs WHERE user_id = $1 ORDER BY created_at DESC",
+      [userId]
+    );
+    return rows.map((r) => this.mapDbJobToJob(r));
+  }
+  mapDbJobToJob(row) {
+    return {
+      id: row.id,
+      userId: row.user_id,
+      type: row.type,
+      status: row.status,
+      progress: row.progress,
+      message: row.message,
+      payload: row.payload,
+      result: row.result,
+      error: row.error,
+      createdAt: row.created_at.toISOString(),
+      completedAt: row.completed_at ? row.completed_at.toISOString() : void 0
+    };
+  }
+};
+var jobRegistry = new BackgroundJobRegistry();
+async function executeFileProcessing(jobId, userId, payload) {
+  const { fileId, fileBufferBase64, mimeType } = payload;
+  await updateJobProgress(jobId, userId, 15, "Extracting text from document...");
+  const buffer = Buffer.from(fileBufferBase64, "base64");
+  let content = "";
+  if (mimeType === "application/pdf") {
+    const data = await pdf(buffer);
+    content = data.text;
+  } else if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+    const data = await mammoth.extractRawText({ buffer });
+    content = data.value;
+  } else if (mimeType.startsWith("text/")) {
+    content = buffer.toString("utf-8");
+  } else {
+    content = buffer.toString("utf-8").replace(/[^\x20-\x7E\r\n\t]/g, " ");
+  }
+  content = content.replace(/\0/g, "");
+  const encryptedContent = encryptData(content);
+  await updateJobProgress(jobId, userId, 50, "Updating database and indexing for search...");
+  const rowCount = await withTransaction(userId, "USER", async (client) => {
+    const result = await client.query(
+      `UPDATE files SET content = $1, is_encrypted = $2 WHERE id = $3`,
+      [encryptedContent, true, fileId]
+    );
+    const versionId = "ver_" + crypto3.randomUUID();
+    await client.query(
+      `INSERT INTO document_versions (id, file_id, content) VALUES ($1, $2, $3)`,
+      [versionId, fileId, encryptedContent]
+    );
+    return result.rowCount;
+  });
+  if (rowCount === 0) throw new Error(`File record ${fileId} not found.`);
+  await chunkAndIndexDocument(fileId, content, userId);
+  return { fileId, content };
+}
+async function executeDocumentAnalysis(jobId, userId, payload) {
+  const userRole = await withTransaction(userId, "USER", async (client) => {
+    const { rows } = await client.query("SELECT role FROM users WHERE id = $1", [userId]);
+    return rows[0]?.role || "USER";
+  });
+  if (payload.type === "legal_ask") {
+    const { prompt, jurisdiction, outputFormat, documents } = payload;
+    await updateJobProgress(jobId, userId, 30, "Searching knowledge base and synthesizing advice...");
+    const result2 = await jobRegistry.orchestrator.askLawyer(prompt, userId, documents);
+    return result2;
+  }
+  if (payload.prompt && payload.folderIds) {
+    const { folderIds, prompt, documentMode, answerStyle, history } = payload;
+    await updateJobProgress(jobId, userId, 30, "Analyzing documents in selected folders...");
+    const result2 = await jobRegistry.orchestrator.interactAnalyze(
+      folderIds,
+      prompt,
+      userId,
+      documentMode,
+      answerStyle,
+      history,
+      void 0,
+      userRole
+    );
+    return { analysis: result2, clauses: [] };
+  }
+  const { documentId, content } = payload;
+  await updateJobProgress(jobId, userId, 30, "AI agents performing legal audit...");
+  const result = await jobRegistry.orchestrator.runAnalysis(documentId, content, userId, void 0, userRole);
+  return result;
+}
+async function executeTemplateDrafting(jobId, userId, payload) {
+  if (payload.type === "refine") {
+    const { text, refineType, param } = payload;
+    let instruction = "";
+    if (refineType === "tone") instruction = `Rewrite the following legal text in a ${param} tone.`;
+    else if (refineType === "grammar") instruction = `Fix the spelling and grammar in the following legal text while preserving legal meaning.`;
+    else if (refineType === "extend") instruction = `Expand the following legal clause with more comprehensive protections.`;
+    else if (refineType === "reduce") instruction = `Shorten the following legal clause to its core obligation.`;
+    else if (refineType === "simplify") instruction = `Rewrite the following legal text in plain English for a non-lawyer.`;
+    else if (refineType === "complete") instruction = `Complete the following sentence or clause in a professional legal manner.`;
+    else if (refineType === "ask") instruction = `Follow this custom instruction: ${param}`;
+    const prompt = `${instruction}
+
+Text:
+${text}
+
+IMPORTANT: Return only the rewritten text without any quotes or preamble.`;
+    const result2 = await withRetry(() => genAI7.getGenerativeModel({ model: "gemini-2.0-flash" }).generateContent(prompt));
+    const content = result2.response.text().trim();
+    const docId2 = "doc_" + crypto3.randomUUID();
+    const title2 = `Refined Text - ${(/* @__PURE__ */ new Date()).toLocaleDateString()}`;
+    const { email: creatorEmail2 } = await withTransaction(userId, "USER", async (client) => {
+      const { rows } = await client.query("SELECT email FROM users WHERE id = $1", [userId]);
+      return { email: rows[0]?.email || "" };
+    });
+    const encryptedContent2 = encryptData(content);
+    await withTransaction(userId, "USER", async (client) => {
+      await client.query(
+        `INSERT INTO files (id, title, type, content, creator_id, creator_email, is_encrypted, shared_with, audit_logs)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [docId2, title2, "draft", encryptedContent2, userId, creatorEmail2, true, JSON.stringify([]), JSON.stringify([])]
+      );
+      const versionId = "ver_" + crypto3.randomUUID();
+      await client.query(
+        `INSERT INTO document_versions (id, file_id, content) VALUES ($1, $2, $3)`,
+        [versionId, docId2, encryptedContent2]
+      );
+    });
+    return { data: content, file_id: docId2 };
+  }
+  const { mode, outputLevel, instructions, formFields, templateId, sourceText, playbookText } = payload;
+  await updateJobProgress(jobId, userId, 20, "Synthesizing legal document...");
+  const result = await jobRegistry.orchestrator.runDrafting({
+    mode,
+    detailLevel: outputLevel,
+    instructions,
+    formFields,
+    templateId,
+    sourceText,
+    playbookText
+  });
+  const docId = "doc_" + crypto3.randomUUID();
+  const title = `AI Draft - ${(/* @__PURE__ */ new Date()).toLocaleDateString()}`;
+  const { email: creatorEmail } = await withTransaction(userId, "USER", async (client) => {
+    const { rows } = await client.query("SELECT email FROM users WHERE id = $1", [userId]);
+    return { email: rows[0]?.email || "" };
+  });
+  const encryptedContent = encryptData(result);
+  await withTransaction(userId, "USER", async (client) => {
+    await client.query(
+      `INSERT INTO files (id, title, type, content, creator_id, creator_email, is_encrypted, shared_with, audit_logs)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [docId, title, "draft", encryptedContent, userId, creatorEmail, true, JSON.stringify([]), JSON.stringify([])]
+    );
+    const versionId = "ver_" + crypto3.randomUUID();
+    await client.query(
+      `INSERT INTO document_versions (id, file_id, content) VALUES ($1, $2, $3)`,
+      [versionId, docId, encryptedContent]
+    );
+  });
+  return { content: result, file_id: docId };
+}
+async function executePrivacyScanning(jobId, userId, payload) {
+  await updateJobProgress(jobId, userId, 20, "Scanning website for privacy compliance...");
+  const result = await jobRegistry.scanner.scanCookie(payload.url, userId, payload.scanDepth);
+  return result;
+}
+async function executeVulnerabilityScanning(jobId, userId, payload) {
+  await updateJobProgress(jobId, userId, 20, "Performing vulnerability assessment...");
+  const result = await jobRegistry.scanner.scanVulnerability(payload.url, userId);
+  return result;
+}
+
+// backend/src/services/exportService.ts
+import { Document, Packer, Paragraph, HeadingLevel, AlignmentType } from "docx";
+import MarkdownIt from "markdown-it";
+var md = new MarkdownIt({
+  html: true,
+  linkify: true,
+  typographer: true
+});
+var buildPdfBuffer = async (title, contentType, content) => {
+  const page = await browserManager.newPage();
+  const context = page.context();
+  try {
+    const renderedContent = md.render(content);
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <style>
+          body { font-family: 'Helvetica', sans-serif; padding: 40px; color: #111827; line-height: 1.6; }
+          h1 { font-size: 24px; color: #000; border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 20px; text-transform: uppercase; }
+          h2 { font-size: 18px; margin-top: 30px; border-bottom: 1px solid #e5e7eb; padding-bottom: 5px; }
+          h3 { font-size: 16px; margin-top: 20px; font-weight: bold; }
+          p { margin-bottom: 15px; text-align: justify; }
+          ul, ol { margin-bottom: 15px; padding-left: 20px; }
+          li { margin-bottom: 5px; }
+          table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+          th, td { border: 1px solid #e5e7eb; padding: 10px; text-align: left; font-size: 12px; }
+          th { background-color: #f9fafb; font-weight: bold; }
+          .header { color: #6b7280; font-size: 12px; margin-bottom: 40px; }
+          .footer { margin-top: 50px; font-size: 10px; color: #9ca3af; border-top: 1px solid #e5e7eb; padding-top: 10px; }
+          .content-area { font-size: 14px; }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          Lexify Digital Asset Vault \u2022 ${contentType.toUpperCase().replace("_", " ")}
+          <br>Generated on ${(/* @__PURE__ */ new Date()).toLocaleString()}
+        </div>
+        <h1>${title}</h1>
+        <div class="content-area">${renderedContent}</div>
+        <div class="footer">
+          Confidential Document \u2022 Powered by Lexify Multi-Agent Legal Engine
+        </div>
+      </body>
+      </html>
+    `;
+    await page.setContent(htmlContent);
+    const pdfBuffer = await page.pdf({
+      format: "A4",
+      margin: { top: "20mm", bottom: "20mm", left: "20mm", right: "20mm" },
+      printBackground: true
+    });
+    return Buffer.from(pdfBuffer);
+  } finally {
+    await page.close();
+    await context.close();
+  }
+};
+var buildDocxBuffer = async (title, contentType, content) => {
+  const sections = content.split("\n\n").map((text) => {
+    const trimmed = text.trim();
+    if (!trimmed) return null;
+    const isHeader = /^[0-9]+\.|^[A-Z\s]{5,}$/.test(trimmed);
+    return new Paragraph({
+      text: trimmed,
+      heading: isHeader ? HeadingLevel.HEADING_1 : void 0,
+      spacing: { after: 200 },
+      alignment: isHeader ? AlignmentType.LEFT : AlignmentType.JUSTIFIED
+    });
+  }).filter((p) => p !== null);
+  const doc = new Document({
+    sections: [{
+      properties: {},
+      children: [
+        new Paragraph({ text: title, heading: HeadingLevel.TITLE, spacing: { after: 400 } }),
+        ...sections
+      ]
+    }]
+  });
+  return await Packer.toBuffer(doc);
+};
+
+// backend/src/controllers/documents.ts
+import crypto4 from "crypto";
+import * as diff from "diff";
+import { fileTypeFromBuffer } from "file-type";
+var getDocuments = async (req, res) => {
+  const userEmail = req.user.email.toLowerCase();
+  const userId = req.user.id;
+  const userRole = req.user.role;
+  try {
+    const docs = await withTransaction(userId, userRole, async (client) => {
+      const { rows } = await client.query(
+        "SELECT * FROM files WHERE creator_id = current_setting('app.current_user_id', true) OR shared_with::jsonb @> $1::jsonb OR shared_with::jsonb @> $2::jsonb ORDER BY created_at DESC",
+        [JSON.stringify([userEmail]), JSON.stringify([{ email: userEmail }])]
+      );
+      return rows;
+    }).catch((e) => {
+      console.error("Failed to fetch documents from DB:", e);
+      throw new Error("DB_FETCH_FAILED");
+    });
+    const formattedDocs = docs.map((r) => ({
+      ...r,
+      content: r.is_encrypted ? decrypt(r.content) : r.content,
+      isEncrypted: r.is_encrypted,
+      signatures: r.signatures || [],
+      redlines: r.redlines || [],
+      sharedWith: r.shared_with || [],
+      auditLogs: r.audit_logs || []
+    }));
+    return res.json(formattedDocs);
+  } catch (err) {
+    const message = err.message === "DB_FETCH_FAILED" ? "Security enclave database unreachable." : "Internal error fetching document repository.";
+    res.status(500).json({ error: message });
+  }
+};
+var getDocumentById = async (req, res) => {
+  const userId = req.user.id;
+  const userRole = req.user.role;
+  try {
+    const doc = await withTransaction(userId, userRole, async (client) => {
+      const { rows } = await client.query("SELECT * FROM files WHERE id = $1", [req.params.id]);
+      if (rows.length === 0) return null;
+      const { rows: versionRows } = await client.query(
+        "SELECT * FROM document_versions WHERE file_id = $1 ORDER BY created_at DESC",
+        [req.params.id]
+      );
+      const r = rows[0];
+      return {
+        ...r,
+        content: r.is_encrypted ? decrypt(r.content) : r.content,
+        versions: versionRows.map((v) => ({
+          id: v.id,
+          content: decrypt(v.content),
+          createdAt: v.created_at
+        })),
+        signatures: r.signatures || [],
+        redlines: r.redlines || [],
+        sharedWith: r.shared_with || [],
+        auditLogs: r.audit_logs || []
+      };
+    });
+    if (doc) {
+      return res.json(doc);
+    }
+    res.status(404).json({ error: "Document not found." });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+var createDocument = async (req, res) => {
+  const { title, type, content } = req.body;
+  const userId = req.user.id;
+  const userRole = req.user.role;
+  const email = req.user.email;
+  const id = "doc_" + crypto4.randomUUID();
+  const encryptedContent = encrypt(content || "");
+  try {
+    await withTransaction(userId, userRole, async (client) => {
+      await client.query(
+        `INSERT INTO files (id, title, type, content, creator_id, creator_email, is_encrypted, shared_with, audit_logs)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [id, title, type, encryptedContent, userId, email, true, JSON.stringify([]), JSON.stringify([])]
+      );
+      const versionId = "ver_" + crypto4.randomUUID();
+      await client.query(
+        `INSERT INTO document_versions (id, file_id, content) VALUES ($1, $2, $3)`,
+        [versionId, id, encryptedContent]
+      );
+    });
+    res.status(201).json({ id, title, type });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+var uploadDocument = async (req, res) => {
+  const file = req.file;
+  if (!file) return res.status(400).json({ error: "No file uploaded. Verify multipart/form-data boundary." });
+  const allowedMimeTypes = [
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "text/plain",
+    "text/markdown",
+    "application/msword"
+  ];
+  if (!allowedMimeTypes.includes(file.mimetype)) {
+    return res.status(400).json({ error: "Unsupported file type. Only PDF, DOCX, and TXT are permitted for legal indexing." });
+  }
+  if (file.size > 25 * 1024 * 1024) {
+    return res.status(400).json({ error: "File size exceeds 25MB security threshold." });
+  }
+  const type = await fileTypeFromBuffer(file.buffer);
+  const detectedMime = type?.mime || file.mimetype;
+  if (!allowedMimeTypes.includes(detectedMime)) {
+    return res.status(400).json({ error: "File signature mismatch. Extension does not match content magic bytes." });
+  }
+  const { title, folder_id } = req.body;
+  const fileId = "doc_" + crypto4.randomUUID();
+  const fileTitle = title || file.originalname;
+  const userId = req.user.id;
+  const userRole = req.user.role;
+  try {
+    await withTransaction(userId, userRole, async (client) => {
+      await client.query(
+        `INSERT INTO files (id, title, type, content, creator_id, creator_email, mime_type, folder_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [fileId, fileTitle, "upload", "", req.user.id, req.user.email, file.mimetype, folder_id || null]
+      );
+    }).catch((e) => {
+      console.error("Database insert failed during upload:", e);
+      throw new Error("DB_UPLOAD_FAILED");
+    });
+    const job = await addJobToQueue(req.user.id, "file_processing", {
+      fileId,
+      fileTitle,
+      fileBufferBase64: file.buffer.toString("base64"),
+      mimeType: file.mimetype,
+      folder_id: folder_id || null,
+      creatorEmail: req.user.email
+    });
+    res.status(202).json({ success: true, job_id: job.id, file_id: fileId });
+  } catch (err) {
+    console.error("Document upload route crash:", err);
+    const message = err.message === "DB_UPLOAD_FAILED" ? "Failed to register upload in security log." : "Internal error during background job queueing.";
+    res.status(500).json({ error: message });
+  }
+};
+var updateDocument = async (req, res) => {
+  const { id } = req.params;
+  const { title, content, folder_id } = req.body;
+  const userId = req.user.id;
+  const userRole = req.user.role;
+  try {
+    await withTransaction(userId, userRole, async (client) => {
+      const { rows } = await client.query("SELECT * FROM files WHERE id = $1", [id]);
+      if (rows.length === 0) throw new Error("Document not found");
+      const doc = rows[0];
+      const encryptedContent = content ? encrypt(content) : doc.content;
+      await client.query(
+        `UPDATE files SET title = COALESCE($1, title), content = $2, folder_id = COALESCE($3, folder_id), updated_at = CURRENT_TIMESTAMP WHERE id = $4`,
+        [title || null, encryptedContent, folder_id || null, id]
+      );
+      const versionId = "ver_" + crypto4.randomUUID();
+      await client.query(
+        `INSERT INTO document_versions (id, file_id, content) VALUES ($1, $2, $3)`,
+        [versionId, id, encryptedContent]
+      );
+      await client.query(`
+        INSERT INTO compliance_audit_logs (user_id, action_type, metadata)
+        VALUES ($1, $2, $3)
+      `, [userId, "document_update", JSON.stringify({ documentId: id, title })]);
+    });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(err.message === "Document not found" ? 404 : 500).json({ error: err.message });
+  }
+};
+var deleteDocument = async (req, res) => {
+  const { id } = req.params;
+  const userId = req.user.id;
+  const userRole = req.user.role;
+  try {
+    await withTransaction(userId, userRole, async (client) => {
+      const { rowCount } = await client.query("DELETE FROM files WHERE id = $1", [id]);
+      if (rowCount === 0) throw new Error("Document not found");
+      await client.query(`
+        INSERT INTO compliance_audit_logs (user_id, action_type, metadata)
+        VALUES ($1, $2, $3)
+      `, [userId, "document_delete", JSON.stringify({ documentId: id })]);
+    });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(err.message === "Document not found" ? 404 : 500).json({ error: err.message });
+  }
+};
+var shareDocument = async (req, res) => {
+  const { id } = req.params;
+  const { email } = req.body;
+  const userId = req.user.id;
+  const userRole = req.user.role;
+  try {
+    const sharedWith = await withTransaction(userId, userRole, async (client) => {
+      const { rows: userRows } = await client.query("SELECT id FROM users WHERE email = $1", [email.toLowerCase()]);
+      if (userRows.length === 0) throw new Error("USER_NOT_FOUND");
+      const { rows } = await client.query("SELECT shared_with FROM files WHERE id = $1", [id]);
+      if (rows.length === 0) throw new Error("Document not found");
+      const sharedWith2 = rows[0].shared_with || [];
+      if (!sharedWith2.includes(email.toLowerCase())) {
+        sharedWith2.push(email.toLowerCase());
+      }
+      await client.query("UPDATE files SET shared_with = $1 WHERE id = $2", [JSON.stringify(sharedWith2), id]);
+      await client.query(`
+        INSERT INTO compliance_audit_logs (user_id, action_type, metadata)
+        VALUES ($1, $2, $3)
+      `, [userId, "document_share", JSON.stringify({ documentId: id, sharedWith: email })]);
+      return sharedWith2;
+    });
+    res.json({ success: true, sharedWith });
+  } catch (err) {
+    if (err.message === "USER_NOT_FOUND") return res.status(404).json({ error: "User with this email not found." });
+    res.status(err.message === "Document not found" ? 404 : 500).json({ error: err.message });
+  }
+};
+var requestSignature = async (req, res) => {
+  const { id } = req.params;
+  const { email } = req.body;
+  const userId = req.user.id;
+  const userRole = req.user.role;
+  try {
+    const signatures = await withTransaction(userId, userRole, async (client) => {
+      const { rows } = await client.query("SELECT signatures FROM files WHERE id = $1", [id]);
+      if (rows.length === 0) throw new Error("Document not found");
+      await client.query(`
+        INSERT INTO compliance_audit_logs (user_id, action_type, metadata)
+        VALUES ($1, $2, $3)
+      `, [userId, "signature_request", JSON.stringify({ documentId: id, requestedFrom: email })]);
+      return rows[0].signatures || [];
+    });
+    res.json({ success: true, signatures });
+  } catch (err) {
+    res.status(err.message === "Document not found" ? 404 : 500).json({ error: err.message });
+  }
+};
+var signDocument = async (req, res) => {
+  const { id } = req.params;
+  const signatureData = req.body.signatureData ?? req.body.fullName;
+  const userId = req.user.id;
+  const userRole = req.user.role;
+  try {
+    await withTransaction(userId, userRole, async (client) => {
+      const { rows } = await client.query("SELECT signatures, content, is_encrypted FROM files WHERE id = $1", [id]);
+      if (rows.length === 0) throw new Error("Document not found");
+      const signatures = rows[0].signatures || [];
+      const plaintext = rows[0].is_encrypted ? decrypt(rows[0].content) : rows[0].content;
+      const contentHash = crypto4.createHash("sha256").update(plaintext, "utf8").digest("hex");
+      const newSignature = {
+        id: crypto4.randomUUID(),
+        userId,
+        userEmail: req.user.email,
+        signedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        contentHash,
+        signatureData
+      };
+      signatures.push(newSignature);
+      await client.query("UPDATE files SET signatures = $1 WHERE id = $2", [JSON.stringify(signatures), id]);
+      await client.query(`
+        INSERT INTO compliance_audit_logs (user_id, action_type, metadata)
+        VALUES ($1, $2, $3)
+      `, [userId, "document_sign", JSON.stringify({ documentId: id, signatureId: newSignature.id })]);
+    });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(err.message === "Document not found" ? 404 : 500).json({ error: err.message });
+  }
+};
+var createRedline = async (req, res) => {
+  const { id } = req.params;
+  const { originalText, proposedText, comment } = req.body;
+  const userId = req.user.id;
+  const userRole = req.user.role;
+  try {
+    const newRedline = await withTransaction(userId, userRole, async (client) => {
+      const { rows } = await client.query("SELECT redlines FROM files WHERE id = $1", [id]);
+      if (rows.length === 0) throw new Error("Document not found");
+      const redlines = rows[0].redlines || [];
+      const redline = { id: crypto4.randomUUID(), originalText, proposedText, comment, proposedByEmail: req.user.email, proposedAt: (/* @__PURE__ */ new Date()).toISOString(), status: "pending" };
+      redlines.push(redline);
+      await client.query("UPDATE files SET redlines = $1 WHERE id = $2", [JSON.stringify(redlines), id]);
+      return redline;
+    });
+    res.status(201).json(newRedline);
+  } catch (err) {
+    res.status(err.message === "Document not found" ? 404 : 500).json({ error: err.message });
+  }
+};
+var acceptRedline = async (req, res) => {
+  const { id, redlineId } = req.params;
+  const userId = req.user.id;
+  const userRole = req.user.role;
+  try {
+    const rows = await withTransaction(userId, userRole, async (client) => {
+      const { rows: rows2 } = await client.query("SELECT * FROM files WHERE id = $1", [id]);
+      return rows2;
+    });
+    if (rows.length === 0) return res.status(404).json({ error: "Document not found" });
+    const doc = rows[0];
+    const redlines = doc.redlines || [];
+    const index = redlines.findIndex((r) => r.id === redlineId);
+    if (index === -1) return res.status(404).json({ error: "Redline not found" });
+    const currentContent = decrypt(doc.content);
+    const proposal = redlines[index];
+    const patch = diff.createPatch("content", proposal.originalText, proposal.proposedText);
+    const applied = diff.applyPatch(currentContent, patch);
+    let finalContent = currentContent;
+    if (applied === false) {
+      const normalizedOriginal = proposal.originalText.replace(/\s+/g, " ").trim().toLowerCase();
+      const normalizedDoc = currentContent.replace(/\s+/g, " ").toLowerCase();
+      if (normalizedDoc.includes(normalizedOriginal)) {
+        const occurrences = getAllIndexesOfNormalizedMatch(currentContent, proposal.originalText);
+        if (occurrences.length === 1) {
+          finalContent = currentContent.substring(0, occurrences[0].start) + proposal.proposedText + currentContent.substring(occurrences[0].end);
+        } else {
+          const fallbackReplaced = currentContent.replace(proposal.originalText, proposal.proposedText);
+          if (fallbackReplaced === currentContent && currentContent.indexOf(proposal.originalText) === -1) {
+            return res.status(400).json({ error: "Could not apply redline. Document structure has changed significantly." });
+          }
+          finalContent = fallbackReplaced;
+        }
+      } else {
+        return res.status(400).json({ error: "Could not apply redline. Clause not found in current document state." });
+      }
+    } else {
+      finalContent = applied;
+    }
+    redlines[index].status = "accepted";
+    const encryptedFinal = encrypt(finalContent);
+    await withTransaction(req.user.id, req.user.role, async (client) => {
+      await client.query("UPDATE files SET content = $1, redlines = $2 WHERE id = $3", [encryptedFinal, JSON.stringify(redlines), id]);
+      const versionId = "ver_" + crypto4.randomUUID();
+      await client.query(
+        `INSERT INTO document_versions (id, file_id, content) VALUES ($1, $2, $3)`,
+        [versionId, id, encryptedFinal]
+      );
+      await client.query(`
+        INSERT INTO compliance_audit_logs (user_id, action_type, metadata)
+        VALUES ($1, $2, $3)
+      `, [req.user.id, "redline_accept", JSON.stringify({ documentId: id, redlineId })]);
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Failed to accept redline:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+var rejectRedline = async (req, res) => {
+  const { id, redlineId } = req.params;
+  const userId = req.user.id;
+  const userRole = req.user.role;
+  try {
+    const rows = await withTransaction(userId, userRole, async (client) => {
+      const { rows: rows2 } = await client.query("SELECT redlines FROM files WHERE id = $1", [id]);
+      return rows2;
+    });
+    if (rows.length === 0) return res.status(404).json({ error: "Document not found" });
+    const redlines = rows[0].redlines || [];
+    const index = redlines.findIndex((r) => r.id === redlineId);
+    if (index === -1) return res.status(404).json({ error: "Redline not found" });
+    redlines[index].status = "rejected";
+    await withTransaction(req.user.id, req.user.role, async (client) => {
+      await client.query("UPDATE files SET redlines = $1 WHERE id = $2", [JSON.stringify(redlines), id]);
+      await client.query(`
+        INSERT INTO compliance_audit_logs (user_id, action_type, metadata)
+        VALUES ($1, $2, $3)
+      `, [req.user.id, "redline_reject", JSON.stringify({ documentId: id, redlineId })]);
+    });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+function getAllIndexesOfNormalizedMatch(source, target) {
+  const results = [];
+  const targetNorm = target.replace(/\s+/g, " ").trim().toLowerCase();
+  for (let i = 0; i < source.length; i++) {
+    for (let j = i + target.length * 0.8; j < i + target.length * 1.2; j++) {
+      const sub = source.substring(i, j);
+      if (sub.replace(/\s+/g, " ").trim().toLowerCase() === targetNorm) {
+        results.push({ start: i, end: j });
+        i = j;
+        break;
+      }
+    }
+  }
+  return results;
+}
+var exportDocument = async (req, res) => {
+  const { title, format, contentType, content, documentId } = req.body;
+  const userId = req.user.id;
+  const userRole = req.user.role;
+  try {
+    if (documentId) {
+      await withTransaction(userId, userRole, async (client) => {
+        await client.query(`
+          INSERT INTO compliance_audit_logs (user_id, action_type, metadata)
+          VALUES ($1, $2, $3)
+        `, [userId, "document_export", JSON.stringify({ documentId, format, title })]);
+      });
+    }
+    let buffer;
+    let mimeType;
+    let filename;
+    if (format === "pdf") {
+      buffer = await buildPdfBuffer(title, contentType, content);
+      mimeType = "application/pdf";
+      filename = `${title}.pdf`;
+    } else {
+      buffer = await buildDocxBuffer(title, contentType, content);
+      mimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+      filename = `${title}.docx`;
+    }
+    res.setHeader("Content-Type", mimeType);
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.send(buffer);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// backend/src/routes/documents.ts
+import multer from "multer";
+var router3 = Router3();
+var upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 75 * 1024 * 1024 } });
+router3.get("/", authenticateToken, getDocuments);
+router3.get("/:id", authenticateToken, getDocumentById);
+router3.post("/", authenticateToken, createDocument);
+router3.put("/:id", authenticateToken, updateDocument);
+router3.delete("/:id", authenticateToken, deleteDocument);
+router3.post("/upload", authenticateToken, upload.single("file"), uploadDocument);
+router3.post("/export", authenticateToken, exportDocument);
+router3.post("/:id/share", authenticateToken, shareDocument);
+router3.post("/:id/request-signature", authenticateToken, requestSignature);
+router3.post("/:id/sign", authenticateToken, signDocument);
+router3.post("/:id/redline", authenticateToken, createRedline);
+router3.post("/:id/redline/:redlineId/accept", authenticateToken, acceptRedline);
+router3.post("/:id/redline/:redlineId/reject", authenticateToken, rejectRedline);
+var documents_default = router3;
+
+// backend/src/routes/folders.ts
+import { Router as Router4 } from "express";
+
+// backend/src/controllers/folders.ts
+import crypto5 from "crypto";
+var getFolders = async (req, res) => {
+  const userId = req.user.id;
+  const userRole = req.user.role;
+  try {
+    const rows = await withTransaction(userId, userRole, async (client) => {
+      const { rows: rows2 } = await client.query(
+        "SELECT * FROM folders WHERE user_id = current_setting('app.current_user_id', true) ORDER BY created_at DESC"
+      );
+      return rows2;
+    });
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+var createFolder = async (req, res) => {
+  const { name } = req.body;
+  const userId = req.user.id;
+  const userRole = req.user.role;
+  if (!name) return res.status(400).json({ error: "Folder name is required." });
+  try {
+    const id = "fld_" + crypto5.randomUUID();
+    const row = await withTransaction(userId, userRole, async (client) => {
+      const { rows } = await client.query(
+        "INSERT INTO folders (id, name, user_id) VALUES ($1, $2, $3) RETURNING *",
+        [id, name, userId]
+      );
+      return rows[0];
+    });
+    res.status(201).json(row);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+var deleteFolder = async (req, res) => {
+  const userId = req.user.id;
+  const userRole = req.user.role;
+  try {
+    await withTransaction(userId, userRole, async (client) => {
+      const result = await client.query(
+        "DELETE FROM folders WHERE id = $1",
+        [req.params.id]
+      );
+      if (result.rowCount === 0) throw new Error("Folder not found.");
+      await client.query(`
+        INSERT INTO compliance_audit_logs (user_id, action_type, metadata)
+        VALUES ($1, $2, $3)
+      `, [userId, "folder_delete", JSON.stringify({ folderId: req.params.id })]);
+    });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(err.message === "Folder not found." ? 404 : 500).json({ error: err.message });
+  }
+};
+
+// backend/src/routes/folders.ts
+var router4 = Router4();
+router4.get("/", authenticateToken, getFolders);
+router4.post("/", authenticateToken, createFolder);
+router4.delete("/:id", authenticateToken, deleteFolder);
+var folders_default = router4;
+
+// backend/src/routes/libraryItems.ts
+import { Router as Router5 } from "express";
+
+// backend/src/controllers/libraryItems.ts
+import crypto6 from "crypto";
+var getLibraryItems = async (req, res) => {
+  const userId = req.user.id;
+  const userRole = req.user.role;
+  try {
+    const rows = await withTransaction(userId, userRole, async (client) => {
+      const { rows: rows2 } = await client.query(
+        "SELECT * FROM library_items WHERE user_id = current_setting('app.current_user_id', true) ORDER BY created_at DESC"
+      );
+      return rows2;
+    }).catch((e) => {
+      console.error("Vault retrieval failed:", e);
+      throw new Error("VAULT_READ_ERROR");
+    });
+    res.json(rows);
+  } catch (err) {
+    const message = err.message === "VAULT_READ_ERROR" ? "Cryptographic vault index unreachable." : "Internal vault error.";
+    res.status(500).json({ error: message });
+  }
+};
+var createLibraryItem = async (req, res) => {
+  const { type, name, description, tags, details } = req.body;
+  const userId = req.user.id;
+  const userRole = req.user.role;
+  const id = "lib_" + crypto6.randomUUID();
+  try {
+    const row = await withTransaction(userId, userRole, async (client) => {
+      const { rows } = await client.query(
+        "INSERT INTO library_items (id, user_id, type, name, description, tags, details) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *",
+        [id, userId, type, name, description, tags, details]
+      );
+      return rows[0];
+    });
+    res.status(201).json(row);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+var deleteLibraryItem = async (req, res) => {
+  const userId = req.user.id;
+  const userRole = req.user.role;
+  try {
+    await withTransaction(userId, userRole, async (client) => {
+      const result = await client.query(
+        "DELETE FROM library_items WHERE id = $1",
+        [req.params.id]
+      );
+      if (result.rowCount === 0) throw new Error("Item not found.");
+      await client.query(`
+        INSERT INTO compliance_audit_logs (user_id, action_type, metadata)
+        VALUES ($1, $2, $3)
+      `, [userId, "library_item_delete", JSON.stringify({ itemId: req.params.id })]);
+    });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(err.message === "Item not found." ? 404 : 500).json({ error: err.message });
+  }
+};
+
+// backend/src/routes/libraryItems.ts
+var router5 = Router5();
+router5.get("/", authenticateToken, getLibraryItems);
+router5.post("/", authenticateToken, createLibraryItem);
+router5.delete("/:id", authenticateToken, deleteLibraryItem);
+var libraryItems_default = router5;
+
+// backend/src/routes/jobs.ts
+import { Router as Router6 } from "express";
+
+// backend/src/controllers/jobs.ts
+var getJobs = async (req, res) => {
+  const userId = req.user.id;
+  const userRole = req.user.role;
+  try {
+    const rows = await withTransaction(userId, userRole, async (client) => {
+      const { rows: rows2 } = await client.query(
+        "SELECT * FROM jobs WHERE user_id = current_setting('app.current_user_id', true) ORDER BY created_at DESC"
+      );
+      return rows2;
+    });
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch jobs" });
+  }
+};
+var getJobById = async (req, res) => {
+  const userId = req.user.id;
+  const userRole = req.user.role;
+  try {
+    const rows = await withTransaction(userId, userRole, async (client) => {
+      const { rows: rows2 } = await client.query("SELECT * FROM jobs WHERE id = $1", [req.params.id]);
+      return rows2;
+    });
+    if (rows.length === 0) {
+      return res.status(404).json({ error: "Background task not found." });
+    }
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch job details" });
+  }
+};
+var streamJobs = (req, res) => {
+  const userId = req.user.id;
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  const clientId = jobRegistry.addClient(userId, res);
+  req.on("close", () => {
+    jobRegistry.removeClient(clientId);
+  });
+  res.write(`data: ${JSON.stringify({ event: "handshake", status: "online" })}
+
+`);
+};
+
+// backend/src/routes/jobs.ts
+var router6 = Router6();
+router6.get("/", authenticateToken, getJobs);
+router6.get("/stream", authenticateToken, streamJobs);
+router6.get("/sse", authenticateToken, streamJobs);
+router6.get("/:id", authenticateToken, getJobById);
+var jobs_default = router6;
+
+// backend/src/routes/analyze.ts
+import { Router as Router7 } from "express";
+var router7 = Router7();
+var orchestrator = new AgentOrchestrator();
+router7.post("/interact", authenticateToken, async (req, res) => {
+  try {
+    const { folderIds, prompt, documentMode, answerStyle, history } = req.body;
+    const job = await addJobToQueue(req.user.id, "document_analysis", {
+      folderIds: Array.isArray(folderIds) ? folderIds : [],
+      prompt,
+      documentMode,
+      answerStyle,
+      history: Array.isArray(history) ? history : []
+    });
+    res.status(202).json({ success: true, job_id: job.id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router7.post("/remediate", authenticateToken, async (req, res) => {
+  try {
+    const { documentId, content } = req.body;
+    const result = await orchestrator.remediate(documentId, content, req.user.id, req.user.role);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+var analyze_default = router7;
+
+// backend/src/routes/drafting.ts
+import { Router as Router8 } from "express";
+import { GoogleGenerativeAI as GoogleGenerativeAI9 } from "@google/generative-ai";
+var router8 = Router8();
+var orchestrator2 = new AgentOrchestrator();
+var genAI8 = new GoogleGenerativeAI9(config.geminiApiKey || "dummy");
+router8.post("/generate", authenticateToken, async (req, res) => {
+  try {
+    const { mode, detailLevel, instructions, formFields, templateId, sourceText, playbookText } = req.body;
+    const result = await orchestrator2.runDrafting({
+      mode,
+      detailLevel,
+      instructions,
+      formFields,
+      templateId,
+      sourceText,
+      playbookText
+    });
+    res.json({ content: result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router8.post("/generate-stream", authenticateToken, async (req, res) => {
+  try {
+    const job = await addJobToQueue(req.user.id, "template_drafting", req.body);
+    res.status(202).json({ success: true, job_id: job.id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router8.post("/refine", authenticateToken, async (req, res) => {
+  try {
+    const { text, type, param } = req.body;
+    const job = await addJobToQueue(req.user.id, "template_drafting", {
+      type: "refine",
+      text,
+      refineType: type,
+      param
+    });
+    res.status(202).json({ success: true, job_id: job.id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router8.post("/process-uploaded-template", authenticateToken, async (req, res) => {
+  const templateText = typeof req.body.templateText === "string" ? req.body.templateText : "";
+  if (!templateText.trim()) {
+    return res.status(400).json({ error: "Template text is required" });
+  }
+  const placeholders = Array.from(templateText.matchAll(/\{\{\s*([^}]+?)\s*\}\}/g));
+  const fields = placeholders.map((match, index) => ({
+    id: match[1].trim().toLowerCase().replace(/[^a-z0-9]+/g, "_") || `field_${index + 1}`,
+    name: match[1].trim(),
+    defaultValue: "",
+    description: "Template field"
+  }));
+  res.json({ data: { redactedText: templateText, fields } });
+});
+var drafting_default = router8;
+
+// backend/src/routes/lawyer.ts
+import { Router as Router9 } from "express";
+import { GoogleGenerativeAI as GoogleGenerativeAI10 } from "@google/generative-ai";
+var router9 = Router9();
+var orchestrator3 = new AgentOrchestrator();
+var genAI9 = new GoogleGenerativeAI10(config.geminiApiKey || "dummy");
+router9.post("/ask", authenticateToken, async (req, res) => {
+  try {
+    const { prompt, documentIds } = req.body;
+    const result = await orchestrator3.askLawyer(prompt, req.user.id, documentIds);
+    res.json({ advice: result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+var lawyer_default = router9;
+
+// backend/src/routes/negotiate.ts
+import { Router as Router10 } from "express";
+var router10 = Router10();
+var orchestrator4 = new AgentOrchestrator();
+router10.post("/run", authenticateToken, async (req, res) => {
+  try {
+    const { documentContent, playbooks, instructions } = req.body;
+    const result = await orchestrator4.runNegotiation(documentContent, playbooks, instructions);
+    res.json({ redlines: result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+var negotiate_default = router10;
+
+// backend/src/routes/vulnerabilities.ts
+import { Router as Router11 } from "express";
+var router11 = Router11();
+router11.post("/scan-cookie", authenticateToken, async (req, res) => {
+  try {
+    const { url, scanDepth } = req.body;
+    const job = await addJobToQueue(req.user.id, "privacy_scanning", { url, scanDepth });
+    res.status(202).json({ success: true, job_id: job.id });
+  } catch (error) {
+    console.error("Cookie scan queueing failed:", error);
+    res.status(500).json({ success: false, error: "Failed to queue cookie scan" });
+  }
+});
+router11.post("/scan-vulnerability", authenticateToken, async (req, res) => {
+  try {
+    const { url } = req.body;
+    const job = await addJobToQueue(req.user.id, "vulnerability_scanning", { url });
+    res.status(202).json({ success: true, job_id: job.id });
+  } catch (error) {
+    console.error("Vulnerability scan queueing failed:", error);
+    res.status(500).json({ success: false, error: "Failed to queue vulnerability scan" });
+  }
+});
+var vulnerabilities_default = router11;
+
+// backend/src/routes/reports.ts
+import { Router as Router12 } from "express";
+
+// backend/src/controllers/reports.ts
+import nodemailer from "nodemailer";
+var shareReportEmail = async (req, res) => {
+  const { recipientEmail, subject, reportTitle, contentType, content, format } = req.body;
+  if (!recipientEmail || !content) {
+    return res.status(400).json({ error: "Recipient email and report content are required." });
+  }
+  try {
+    await withTransaction(req.user.id, req.user.role, async (client) => {
+      await client.query(`
+        INSERT INTO compliance_audit_logs (user_id, action_type, metadata)
+        VALUES ($1, $2, $3)
+      `, [req.user.id, "report_share", JSON.stringify({ recipientEmail, reportTitle, format })]);
+    });
+    const transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST || "smtp.example.com",
+      port: Number(process.env.SMTP_PORT) || 587,
+      secure: false,
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS
+      }
+    });
+    if (!process.env.SMTP_USER) {
+      console.log(`[STUB]: Sending report "${reportTitle}" to ${recipientEmail} in ${format} format.`);
+      return res.json({ success: true, message: `[DEMO MODE] Report successfully dispatched to ${recipientEmail}.` });
+    }
+    await transporter.sendMail({
+      from: '"Lexify Audits" <noreply@Lexify.cloud>',
+      to: recipientEmail,
+      subject: subject || `Lexify Report: ${reportTitle}`,
+      text: content
+    });
+    res.json({ success: true, message: `Report successfully dispatched to ${recipientEmail}.` });
+  } catch (err) {
+    console.error("Failed to share report via email:", err);
+    res.status(500).json({ error: "Internal server error during report dispatch." });
+  }
+};
+
+// backend/src/routes/reports.ts
+var router12 = Router12();
+router12.post("/share-email", authenticateToken, shareReportEmail);
+var reports_default = router12;
+
+// backend/src/routes/settings.ts
+import { Router as Router13 } from "express";
+var router13 = Router13();
+router13.get("/:key", authenticateToken, async (req, res) => {
+  const { key } = req.params;
+  const client = req.dbClient || pool;
+  try {
+    const { rows } = await client.query("SELECT value FROM system_settings WHERE key = $1", [key]);
+    if (rows.length === 0) return res.status(404).json({ error: "Setting not found" });
+    res.json(rows[0].value);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+var settings_default = router13;
+
+// backend/src/routes/index.ts
+var router14 = Router14();
+router14.get("/health", async (req, res) => {
+  try {
+    const start = Date.now();
+    await pool.query("SELECT 1");
+    const latency = Date.now() - start;
+    res.json({
+      status: "UP",
+      database: "CONNECTED",
+      latency: `${latency}ms`,
+      timestamp: (/* @__PURE__ */ new Date()).toISOString()
+    });
+  } catch (err) {
+    res.status(503).json({
+      status: "DOWN",
+      database: "DISCONNECTED",
+      timestamp: (/* @__PURE__ */ new Date()).toISOString()
+    });
+  }
+});
+router14.use("/auth", auth_default);
+router14.use("/admin", admin_default);
+router14.use("/documents", documents_default);
+router14.use("/folders", folders_default);
+router14.use("/library-items", libraryItems_default);
+router14.use("/jobs", jobs_default);
+router14.use("/analyze", analyze_default);
+router14.use("/drafting", drafting_default);
+router14.use("/lawyer", lawyer_default);
+router14.use("/negotiate", negotiate_default);
+router14.use("/vulnerabilities", vulnerabilities_default);
+router14.use("/reports", reports_default);
+router14.use("/settings", settings_default);
+var routes_default = router14;
+
+// backend/src/middleware/cors.ts
+import cors from "cors";
+var corsOrigins = new Set(
+  [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "https://privlex-ai.onrender.com",
+    // Added explicit production URL
+    config.corsOrigin,
+    config.vercelUrl
+  ].flatMap((origin) => origin ? origin.split(",") : []).map((origin) => origin.trim()).filter(Boolean)
+);
+var corsMiddleware = cors({
+  origin: (origin, callback) => {
+    if (!origin) {
+      return callback(null, true);
+    }
+    if (corsOrigins.has(origin) || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) || /^https?:\/\/[a-z0-9-]+\.app\.github\.dev(:\d+)?$/i.test(origin) || /^https?:\/\/[a-z0-9-]+\.github\.dev(:\d+)?$/i.test(origin) || /^https?:\/\/[a-z0-9-]+\.vercel\.app(:\d+)?$/i.test(origin) || // Explicitly allow all Render domains
+    /^https?:\/\/[a-z0-9-]+\.onrender\.com(:\d+)?$/i.test(origin) || // Firebase/Cloud Workstations
+    /^https?:\/\/([a-z0-9-]+\.)?firebase\.google\.com(:\d+)?$/i.test(origin) || /^https?:\/\/[a-z0-9-]+\.cluster-[a-z0-9]+\.cloudworkstations\.dev(:\d+)?$/i.test(origin) || /cloudworkstations\.dev$/i.test(origin) || process.env.NODE_ENV !== "production") {
+      callback(null, true);
+    } else {
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: true
+});
+
+// backend/src/middleware/error.ts
+import * as Sentry2 from "@sentry/node";
+
+// backend/src/utils/logger.ts
+import pino from "pino";
+var isProduction2 = process.env.NODE_ENV === "production";
+var logger = pino({
+  level: process.env.LOG_LEVEL || "info",
+  transport: isProduction2 ? void 0 : {
+    target: "pino-pretty",
+    options: {
+      colorize: true,
+      ignore: "pid,hostname",
+      translateTime: "SYS:standard"
+    }
+  },
+  base: {
+    env: process.env.NODE_ENV
+  }
+});
+
+// backend/src/middleware/error.ts
+var errorHandler = (err, req, res, next) => {
+  const alreadyEnded = res.writableEnded || res.headersSent;
+  if (alreadyEnded) {
+    return;
+  }
+  const status = err.status || 500;
+  const message = err.message || "Internal Server Error";
+  const code = err.code || "INTERNAL_ERROR";
+  logger.error({
+    err: {
+      message: err.message,
+      stack: err.stack,
+      code: err.code
+    },
+    status,
+    url: req.url,
+    method: req.method,
+    user: req.user?.id
+  }, "API Error occurred");
+  if (status >= 500) {
+    Sentry2.captureException(err, {
+      extra: {
+        url: req.url,
+        method: req.method,
+        user: req.user?.id
+      }
+    });
+  }
+  res.status(status).json({
+    success: false,
+    error: message,
+    code,
+    details: process.env.NODE_ENV === "development" ? err.details : void 0
+  });
+};
+
+// backend/src/middleware/queryLogger.ts
+var isPatched = false;
+var initQueryLogger = () => {
+  if (isPatched) return;
+  const originalQuery = pool.query.bind(pool);
+  pool.query = (...args) => {
+    const start = Date.now();
+    const query = typeof args[0] === "string" ? args[0] : args[0].text;
+    const params = args[1] || [];
+    return originalQuery(...args).then((result) => {
+      const duration = Date.now() - start;
+      if (process.env.NODE_ENV !== "production" || duration > 100) {
+        console.log(`[QueryLogger] ${duration}ms | ${query.substring(0, 200)}${query.length > 200 ? "..." : ""}`);
+      }
+      return result;
+    }).catch((err) => {
+      const duration = Date.now() - start;
+      console.error(`[QueryLogger] FAILED ${duration}ms | ${query} | Error: ${err.message}`);
+      throw err;
+    });
+  };
+  isPatched = true;
+};
+
+// server.ts
+var app = express();
+var httpServer = http.createServer(app);
+initSentry(app);
+app.use(corsMiddleware);
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ limit: "50mb", extended: true }));
+initQueryLogger();
+app.use("/api", routes_default);
+if (config.nodeEnv === "production") {
+  const distPath = path2.resolve(process.cwd(), "dist", "client");
+  app.use(express.static(distPath));
+  app.get("*", (req, res) => {
+    res.sendFile(path2.join(distPath, "index.html"));
+  });
+}
+initSentryErrorHandler(app);
+app.use(errorHandler);
+async function startServer() {
+  validateEnv();
+  if (config.nodeEnv !== "production") {
+    const vite = await createViteServer({
+      server: {
+        middlewareMode: true,
+        hmr: { server: httpServer }
+      },
+      appType: "spa"
+    });
+    app.use(vite.middlewares);
+  }
+  const port = config.port;
+  httpServer.listen(port, "0.0.0.0", () => {
+    logger.info(`Server running on http://localhost:${port} [${config.nodeEnv}]`);
+  });
+}
+if (!process.env.VERCEL && process.env.NODE_ENV !== "test") {
+  startServer();
+}
+var server_default = app;
+export {
+  server_default as default
+};
