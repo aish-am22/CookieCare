@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { apiUrl } from "../config";
 import { 
   Scale, 
@@ -54,6 +54,15 @@ export default function NegotiateHub({
   const [evaluating, setEvaluating] = useState(false);
   const [errorText, setErrorText] = useState("");
 
+  // Accept in-flight guard to prevent duplicate accept requests
+  const [acceptingMarkupId, setAcceptingMarkupId] = useState<string | null>(null);
+
+  // In-flight evaluation guard: tracks which docId is currently being evaluated
+  const [evaluatingDocId, setEvaluatingDocId] = useState<string | null>(null);
+
+  // Stale-response guard: only the latest request token is allowed to commit results
+  const evalRequestIdRef = useRef(0);
+
   // Lumi Assistant terminal state
   const [lumiOpen, setLumiOpen] = useState(true);
   const [lumiMessages, setLumiMessages] = useState<Array<{ role: "user" | "lumi" | "system", text: string }>>([
@@ -68,47 +77,67 @@ export default function NegotiateHub({
   const [customComment, setCustomComment] = useState("");
   const [proposing, setProposing] = useState(false);
 
-  // Fetch complete details of the selected document
+  // Fetch complete details of the selected document and trigger evaluation once.
+  // This is the single source of truth for automatic evaluation — it should only
+  // be called from the useEffect below, not from handleDocumentChange.
   const loadActiveDocumentDetails = async (docId: string) => {
     if (!docId) return;
     try {
       const res = await fetch(apiUrl(`/api/documents/${docId}`), {
-        headers: {
-          "Authorization": `Bearer ${authToken}`
-        }
+        headers: { "Authorization": `Bearer ${authToken}` }
       });
       if (res.ok) {
         const fullDoc = await res.json();
         setActiveDoc(fullDoc);
-        // Automatically run multi-agent evaluation for the loaded contract
-        runMultiAgentEvaluation(fullDoc.content);
+        runMultiAgentEvaluation(docId, fullDoc.content, {
+          title: fullDoc.title,
+          type: fullDoc.type
+        });
       }
     } catch (err) {
       console.error("Error fetching document details:", err);
     }
   };
 
+  // Track the last docId loaded so re-renders with the same document don't
+  // trigger a redundant fetch + evaluate cycle.
+  const loadedDocIdRef = useRef<string | null>(null);
+
   useEffect(() => {
     const docId = activeDocument?.id || documents[0]?.id || "";
-    if (docId) {
-      setSelectedDocId(docId);
-      loadActiveDocumentDetails(docId);
-    }
+    if (!docId) return;
+    // Only load if the document has actually changed
+    if (docId === loadedDocIdRef.current) return;
+    loadedDocIdRef.current = docId;
+    setSelectedDocId(docId);
+    loadActiveDocumentDetails(docId);
   }, [activeDocument, documents]);
 
   const handleDocumentChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const docId = e.target.value;
     setSelectedDocId(docId);
     const matched = documents.find(d => d.id === docId);
-    if (matched) {
-      onSelectDocument(matched);
-      loadActiveDocumentDetails(docId);
-    }
+    if (!matched) return;
+    // Notify parent — this will update activeDocument, which fires useEffect above.
+    // Do NOT call loadActiveDocumentDetails here; the effect is the sole trigger.
+    onSelectDocument(matched);
   };
 
   // 1. RUN MULTI-AGENT EVALUATOR (Orchestration Graph Router)
-  const runMultiAgentEvaluation = async (docContent: string) => {
+  const runMultiAgentEvaluation = async (
+    docId: string,
+    docContent: string,
+    metadata: { title: string; type: string }
+  ) => {
     if (!docContent) return;
+
+    // In-flight guard: if this exact document is already being evaluated, skip
+    if (evaluatingDocId === docId) return;
+
+    // Stale-response guard: increment the counter and capture this call's token
+    const requestId = ++evalRequestIdRef.current;
+
+    setEvaluatingDocId(docId);
     setEvaluating(true);
     setErrorText("");
     try {
@@ -120,40 +149,47 @@ export default function NegotiateHub({
         },
         body: JSON.stringify({
           content: docContent,
-          documentTitle: activeDoc?.title || "Draft Contract",
-          documentType: activeDoc?.type || "Agreement"
+          documentTitle: metadata.title,
+          documentType: metadata.type
         })
       });
 
       const parsed = await res.json();
+
+      // If a newer evaluation was kicked off while this one was in flight, discard
+      if (requestId !== evalRequestIdRef.current) return;
+
       if (!res.ok) {
         throw new Error(parsed.error || "Evaluation failed.");
       }
 
       const markups = parsed.data?.markups || [];
       setAgentMarkups(markups);
-      if (markups.length > 0) {
-        setSelectedMarkup(markups[0]);
-      } else {
-        setSelectedMarkup(null);
-      }
+      setSelectedMarkup(markups.length > 0 ? markups[0] : null);
     } catch (err: any) {
-      setErrorText(err.message || "Failed to trigger multi-agent pipeline.");
+      if (requestId === evalRequestIdRef.current) {
+        setErrorText(err.message || "Failed to trigger multi-agent pipeline.");
+      }
     } finally {
-      setEvaluating(false);
+      if (requestId === evalRequestIdRef.current) {
+        setEvaluating(false);
+        setEvaluatingDocId(null);
+      }
     }
   };
 
   // 2. ACCEPT AND PATCH MERGE AGENTIC MARKUP
   const handleAcceptAgentMarkup = async (markup: AgentMarkup) => {
     if (!activeDoc) return;
-    
-    // Optimistically or server-side replace content
+    // Prevent duplicate accept clicks for the same markup
+    if (acceptingMarkupId === markup.clauseId) return;
+
     const originalText = markup.original;
     const proposedText = markup.replacement;
-    
+
+    setAcceptingMarkupId(markup.clauseId);
     try {
-      // 1. First register the proposal in our backlines DB
+      // 1. Register the proposal in the redlines DB
       const pRes = await fetch(apiUrl(`/api/documents/${activeDoc.id}/redline`), {
         method: "POST",
         headers: {
@@ -170,7 +206,7 @@ export default function NegotiateHub({
       const proposal = await pRes.json();
       if (!pRes.ok) throw new Error(proposal.error || "Failed to submit redline");
 
-      // 2. Accept and merge the registered proposal immediately 
+      // 2. Accept and merge the registered proposal immediately
       const acceptRes = await fetch(apiUrl(`/api/documents/${activeDoc.id}/redline/${proposal.id}/accept`), {
         method: "POST",
         headers: {
@@ -184,22 +220,23 @@ export default function NegotiateHub({
         throw new Error(errData.error || "Failed to merge changes into contract.");
       }
 
-      // Success, remove accepted markup from state matching original text
+      // Remove the accepted markup immediately — clear selection if it was active
       setAgentMarkups(prev => prev.filter(m => m.clauseId !== markup.clauseId));
-      if (selectedMarkup?.clauseId === markup.clauseId) {
-        setSelectedMarkup(null);
-      }
-      
+      setSelectedMarkup(prev =>
+        prev?.clauseId === markup.clauseId ? null : prev
+      );
+
       onRefresh();
       loadActiveDocumentDetails(activeDoc.id);
 
-      // Tell Lumi
       setLumiMessages(prev => [
         ...prev,
         { role: "lumi", text: `Success! Merged replacement clause into active contract: "${proposedText}"` }
       ]);
     } catch (err: any) {
       alert(err.message || "Failed to accept markup patch.");
+    } finally {
+      setAcceptingMarkupId(null);
     }
   };
 
@@ -714,10 +751,11 @@ export default function NegotiateHub({
                           <button
                             id={`markup-accept-direct`}
                             onClick={() => handleAcceptAgentMarkup(selectedMarkup)}
-                            className="flex-1 bg-black text-white hover:bg-zinc-800 rounded py-2.5 text-xs font-mono font-bold uppercase flex items-center justify-center space-x-1.5 cursor-pointer transition-colors"
+                            disabled={acceptingMarkupId === selectedMarkup.clauseId}
+                            className="flex-1 bg-black text-white hover:bg-zinc-800 rounded py-2.5 text-xs font-mono font-bold uppercase flex items-center justify-center space-x-1.5 cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                           >
                             <Check className="w-3.5 h-3.5" />
-                            <span>Accept Patch</span>
+                            <span>{acceptingMarkupId === selectedMarkup.clauseId ? "Applying..." : "Accept Patch"}</span>
                           </button>
                           <button
                             id={`markup-dismiss-direct`}
@@ -746,7 +784,16 @@ export default function NegotiateHub({
                     <div className="space-y-3 p-4">
                       <p>No active risk markups detected in memory stream.</p>
                       <button
-                        onClick={() => runMultiAgentEvaluation(activeDoc.content)}
+                        onClick={() => {
+                          if (!activeDoc) return;
+                          // Manual re-run: clear the in-flight guard so the user
+                          // can explicitly re-evaluate the same document
+                          setEvaluatingDocId(null);
+                          runMultiAgentEvaluation(activeDoc.id, activeDoc.content, {
+                            title: activeDoc.title,
+                            type: activeDoc.type
+                          });
+                        }}
                         className="bg-black text-white px-4 py-2 text-[10px] uppercase font-bold font-mono tracking-wider hover:bg-zinc-800 rounded inline-block cursor-pointer"
                       >
                         Run Multi-Agent Evaluator

@@ -1,29 +1,170 @@
+var __defProp = Object.defineProperty;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __esm = (fn, res) => function __init() {
+  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+};
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
+
+// backend/src/config/index.ts
+import dotenv from "dotenv";
+var config, isProduction;
+var init_config = __esm({
+  "backend/src/config/index.ts"() {
+    dotenv.config();
+    config = {
+      port: Number(process.env.PORT) || 3e3,
+      nodeEnv: process.env.NODE_ENV || "development",
+      databaseUrl: process.env.DATABASE_URL || "",
+      // OpenRouter replaces Gemini as the AI provider
+      openRouterApiKey: process.env.OPENROUTER_API_KEY || "",
+      // Kept for backward compatibility — no longer used for AI calls
+      geminiApiKey: process.env.GEMINI_API_KEY || "",
+      jwtSecret: process.env.JWT_SECRET || "privsec-ai-enterprise-secret-2026",
+      // Fixed: Added the Render production URL as a default fallback
+      corsOrigin: process.env.CORS_ORIGIN || "https://privlex-ai.onrender.com",
+      vercelUrl: process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "",
+      isVercel: !!process.env.VERCEL
+    };
+    isProduction = config.nodeEnv === "production";
+  }
+});
+
+// backend/src/config/database.ts
+import pg from "pg";
+var Pool, rawConnectionString, isNeon, isPooler, connectionString, pool;
+var init_database = __esm({
+  "backend/src/config/database.ts"() {
+    init_config();
+    ({ Pool } = pg);
+    rawConnectionString = config.databaseUrl.trim();
+    isNeon = rawConnectionString.includes("neon.tech");
+    isPooler = rawConnectionString.includes("-pooler.");
+    connectionString = rawConnectionString;
+    if (isNeon) {
+      connectionString = rawConnectionString.replace(/[?&]sslmode=[^&]*/g, "").replace(/[?&]$/, "").replace(/\?$/, "");
+      if (isPooler && !connectionString.includes("pgbouncer=true")) {
+        connectionString += (connectionString.includes("?") ? "&" : "?") + "pgbouncer=true";
+      }
+    }
+    pool = new Pool({
+      connectionString,
+      ssl: isNeon ? { rejectUnauthorized: false } : void 0,
+      max: 20,
+      idleTimeoutMillis: 3e4,
+      connectionTimeoutMillis: 6e4,
+      keepAlive: true,
+      keepAliveInitialDelayMillis: 0
+    });
+    pool.on("error", (err) => {
+      console.error("Unexpected database pool error:", err);
+    });
+  }
+});
+
+// backend/src/utils/crypto.ts
+var crypto_exports = {};
+__export(crypto_exports, {
+  decrypt: () => decrypt,
+  decryptData: () => decryptData,
+  encrypt: () => encrypt,
+  encryptData: () => encryptData
+});
+import crypto2 from "crypto";
+function encryptData(text) {
+  if (!text) return "";
+  if (!ENCRYPTION_KEY || Buffer.from(ENCRYPTION_KEY).length !== 32) {
+    throw new Error("ENCRYPTION_KEY must be 32 bytes.");
+  }
+  const iv = crypto2.randomBytes(12);
+  const cipher = crypto2.createCipheriv(ALGORITHM, Buffer.from(ENCRYPTION_KEY), iv);
+  let encrypted = cipher.update(text, "utf8", "hex");
+  encrypted += cipher.final("hex");
+  const authTag = cipher.getAuthTag().toString("hex");
+  return `LEXGCM_${iv.toString("hex")}:${authTag}:${encrypted}`;
+}
+function decryptData(text) {
+  if (!text) return "";
+  if (text.startsWith("LEXGCM_")) {
+    try {
+      if (!ENCRYPTION_KEY || Buffer.from(ENCRYPTION_KEY).length !== 32) {
+        throw new Error("ENCRYPTION_KEY must be 32 bytes.");
+      }
+      const payload = text.replace("LEXGCM_", "");
+      const [ivHex, authTagHex, encryptedHex] = payload.split(":");
+      if (!ivHex || !authTagHex || !encryptedHex) {
+        return "[DECRYPTION_FORMAT_ERROR]";
+      }
+      const iv = Buffer.from(ivHex, "hex");
+      const authTag = Buffer.from(authTagHex, "hex");
+      const decipher = crypto2.createDecipheriv(ALGORITHM, Buffer.from(ENCRYPTION_KEY), iv);
+      decipher.setAuthTag(authTag);
+      let decrypted = decipher.update(encryptedHex, "hex", "utf8");
+      decrypted += decipher.final("utf8");
+      return decrypted;
+    } catch (err) {
+      console.error("Decryption failed:", err);
+      (async () => {
+        let client;
+        try {
+          client = await pool.connect();
+          await client.query("BEGIN");
+          await client.query("SET LOCAL app.current_user_role = 'ADMIN'");
+          await client.query(`
+            INSERT INTO compliance_audit_logs (user_id, action_type, metadata)
+            VALUES ($1, $2, $3)
+          `, [null, "decryption_failure", JSON.stringify({ error: err.message, timestamp: (/* @__PURE__ */ new Date()).toISOString() })]);
+          await client.query("COMMIT");
+        } catch (auditErr) {
+          if (client) {
+            try {
+              await client.query("ROLLBACK");
+            } catch (rollbackErr) {
+            }
+          }
+          console.error("Failed to log decryption failure audit:", auditErr);
+        } finally {
+          if (client) client.release();
+        }
+      })();
+      return "[DECRYPTION_FAILURE]";
+    }
+  }
+  if (text.startsWith("LEXENC_")) {
+    try {
+      const rawBase64 = text.replace("LEXENC_", "");
+      return Buffer.from(rawBase64, "base64").toString("utf-8");
+    } catch (err) {
+      return "[LEGACY_DECRYPTION_ERROR]";
+    }
+  }
+  return text;
+}
+var ENCRYPTION_KEY, ALGORITHM, encrypt, decrypt;
+var init_crypto = __esm({
+  "backend/src/utils/crypto.ts"() {
+    init_database();
+    ENCRYPTION_KEY = process.env.ENCRYPTION_KEY;
+    ALGORITHM = "aes-256-gcm";
+    if (!ENCRYPTION_KEY || Buffer.from(ENCRYPTION_KEY).length !== 32) {
+      console.warn("\u26A0\uFE0F [SECURITY] ENCRYPTION_KEY is missing or invalid (must be 32 bytes). Encryption/Decryption features will fail.");
+    }
+    encrypt = encryptData;
+    decrypt = decryptData;
+  }
+});
+
 // server.ts
+init_config();
 import express from "express";
 import http from "http";
 import path2 from "path";
 import { createServer as createViteServer } from "vite";
 
-// backend/src/config/index.ts
-import dotenv from "dotenv";
-dotenv.config();
-var config = {
-  port: Number(process.env.PORT) || 3e3,
-  nodeEnv: process.env.NODE_ENV || "development",
-  databaseUrl: process.env.DATABASE_URL || "",
-  // OpenRouter replaces Gemini as the AI provider
-  openRouterApiKey: process.env.OPENROUTER_API_KEY || "",
-  // Kept for backward compatibility — no longer used for AI calls
-  geminiApiKey: process.env.GEMINI_API_KEY || "",
-  jwtSecret: process.env.JWT_SECRET || "privsec-ai-enterprise-secret-2026",
-  // Fixed: Added the Render production URL as a default fallback
-  corsOrigin: process.env.CORS_ORIGIN || "https://privlex-ai.onrender.com",
-  vercelUrl: process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "",
-  isVercel: !!process.env.VERCEL
-};
-var isProduction = config.nodeEnv === "production";
-
 // backend/src/config/validate.ts
+init_config();
 function validateEnv() {
   const required = [
     { key: "DATABASE_URL", value: config.databaseUrl },
@@ -68,38 +209,15 @@ function initSentryErrorHandler(app2) {
 }
 
 // backend/src/routes/index.ts
+init_database();
 import { Router as Router14 } from "express";
-
-// backend/src/config/database.ts
-import pg from "pg";
-var { Pool } = pg;
-var rawConnectionString = config.databaseUrl.trim();
-var isNeon = rawConnectionString.includes("neon.tech");
-var isPooler = rawConnectionString.includes("-pooler.");
-var connectionString = rawConnectionString;
-if (isNeon) {
-  connectionString = rawConnectionString.replace(/[?&]sslmode=[^&]*/g, "").replace(/[?&]$/, "").replace(/\?$/, "");
-  if (isPooler && !connectionString.includes("pgbouncer=true")) {
-    connectionString += (connectionString.includes("?") ? "&" : "?") + "pgbouncer=true";
-  }
-}
-var pool = new Pool({
-  connectionString,
-  ssl: isNeon ? { rejectUnauthorized: false } : void 0,
-  max: 20,
-  idleTimeoutMillis: 3e4,
-  connectionTimeoutMillis: 6e4,
-  keepAlive: true,
-  keepAliveInitialDelayMillis: 0
-});
-pool.on("error", (err) => {
-  console.error("Unexpected database pool error:", err);
-});
 
 // backend/src/routes/auth.ts
 import { Router } from "express";
 
 // backend/src/controllers/auth.ts
+init_database();
+init_config();
 import argon2 from "argon2";
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
@@ -184,6 +302,8 @@ var auth_default = router;
 import { Router as Router2 } from "express";
 
 // backend/src/middleware/auth.ts
+init_config();
+init_database();
 import jwt2 from "jsonwebtoken";
 var authenticateToken = async (req, res, next) => {
   const authHeader = req.headers["authorization"];
@@ -238,7 +358,11 @@ var isAdmin = (req, res, next) => {
   next();
 };
 
+// backend/src/controllers/admin.ts
+init_database();
+
 // backend/src/utils/dbUtils.ts
+init_database();
 async function withTransaction(userId, userRole, fn) {
   const client = await pool.connect();
   try {
@@ -256,6 +380,292 @@ async function withTransaction(userId, userRole, fn) {
   } finally {
     client.release();
   }
+}
+
+// backend/src/RAG/ragService.ts
+init_database();
+function sanitizeText(text) {
+  return text.replace(/\0/g, "");
+}
+function splitIntoClauseAwareChunks(content) {
+  const paragraphs = content.split(/\n\n+/);
+  const chunks = [];
+  let currentChunk = "";
+  const maxChunkLength = 800;
+  const overlapLength = 150;
+  for (const para of paragraphs) {
+    const trimmed = para.trim();
+    if (!trimmed) continue;
+    if ((currentChunk + "\n\n" + trimmed).length <= maxChunkLength) {
+      currentChunk = currentChunk ? currentChunk + "\n\n" + trimmed : trimmed;
+    } else {
+      if (currentChunk) chunks.push(currentChunk);
+      const lastPart = currentChunk.substring(Math.max(0, currentChunk.length - overlapLength));
+      const overlapText = lastPart.includes("\n") ? lastPart.substring(lastPart.indexOf("\n") + 1) : lastPart;
+      currentChunk = overlapText ? overlapText.trim() + "\n\n" + trimmed : trimmed;
+    }
+  }
+  if (currentChunk) {
+    chunks.push(currentChunk);
+  }
+  return chunks.filter((c) => c.trim().length > 15);
+}
+async function embedText(_text) {
+  return null;
+}
+async function chunkAndIndexDocument(fileId, content, userId) {
+  const cleanedContent = sanitizeText(content);
+  const chunks = splitIntoClauseAwareChunks(cleanedContent);
+  const processedChunks = [];
+  for (let i = 0; i < chunks.length; i++) {
+    const vector = await embedText(chunks[i]);
+    processedChunks.push({
+      index: i,
+      content: chunks[i],
+      // null embedding stored as NULL — chunk is still searchable via lexical search
+      embedding: vector ? `[${vector.join(",")}]` : null
+    });
+  }
+  await withTransaction(userId, "USER", async (client) => {
+    for (const chunk of processedChunks) {
+      await client.query(
+        "INSERT INTO legal_document_chunks (file_id, user_id, chunk_index, content, embedding) VALUES ($1, $2, $3, $4, $5)",
+        [fileId, userId, chunk.index, chunk.content, chunk.embedding]
+      );
+    }
+  });
+}
+async function searchHybrid(query, userId, fileIds, folderIds) {
+  const embedding = await embedText(query);
+  const hasEmbedding = embedding !== null;
+  const vectorStr = hasEmbedding ? `[${embedding.join(",")}]` : null;
+  let resolvedFolderIds;
+  let includeNullFolder = false;
+  if (folderIds && folderIds.length > 0) {
+    const realFolderIds = folderIds.filter((id) => id !== "root");
+    includeNullFolder = folderIds.includes("root");
+    resolvedFolderIds = realFolderIds.length > 0 ? realFolderIds : void 0;
+  }
+  const buildFolderFilter = (startIdx, params) => {
+    const parts = [];
+    let idx = startIdx;
+    if (resolvedFolderIds && resolvedFolderIds.length > 0) {
+      parts.push(`file_id IN (SELECT id FROM files WHERE folder_id = ANY($${idx++}))`);
+      params.push(resolvedFolderIds);
+    }
+    if (includeNullFolder) {
+      parts.push(`file_id IN (SELECT id FROM files WHERE folder_id IS NULL)`);
+    }
+    if (parts.length === 0) return { sql: "", params, nextIdx: idx };
+    return { sql: ` AND (${parts.join(" OR ")})`, params, nextIdx: idx };
+  };
+  return await withTransaction(userId, "USER", async (client) => {
+    console.log(`[searchHybrid] userId=${userId} query="${query.substring(0, 80)}" folderIds=${JSON.stringify(folderIds)} resolvedFolderIds=${JSON.stringify(resolvedFolderIds)} includeNullFolder=${includeNullFolder}`);
+    try {
+      let countSql = `SELECT COUNT(*) FROM legal_document_chunks WHERE user_id = $1`;
+      const countParams = [userId];
+      if (fileIds && fileIds.length > 0) {
+        countSql += ` AND file_id = ANY($2)`;
+        countParams.push(fileIds);
+      } else if (resolvedFolderIds && resolvedFolderIds.length > 0) {
+        const folderParts = [
+          `file_id IN (SELECT id FROM files WHERE folder_id = ANY($2))`
+        ];
+        countParams.push(resolvedFolderIds);
+        if (includeNullFolder) {
+          folderParts.push(`file_id IN (SELECT id FROM files WHERE folder_id IS NULL)`);
+        }
+        countSql += ` AND (${folderParts.join(" OR ")})`;
+      } else if (includeNullFolder) {
+        countSql += ` AND file_id IN (SELECT id FROM files WHERE folder_id IS NULL)`;
+      }
+      const { rows: countRows } = await client.query(countSql, countParams);
+      console.log(`[searchHybrid] Available chunks in scope: ${countRows[0]?.count ?? 0}`);
+    } catch (countErr) {
+      console.warn("[searchHybrid] Count query failed:", countErr.message);
+    }
+    let semanticRows = [];
+    if (hasEmbedding) {
+      const semanticParams = [userId, vectorStr];
+      let sIdx = 3;
+      let fileFilterSql2 = "";
+      if (fileIds && fileIds.length > 0) {
+        fileFilterSql2 += ` AND file_id = ANY($${sIdx++})`;
+        semanticParams.push(fileIds);
+      }
+      const folderFilter2 = buildFolderFilter(sIdx, semanticParams);
+      sIdx = folderFilter2.nextIdx;
+      const semanticQuerySql = `
+        SELECT id, content, file_id, (SELECT title FROM files WHERE id = file_id) as title
+        FROM legal_document_chunks
+        WHERE user_id = $1
+        ${fileFilterSql2}
+        ${folderFilter2.sql}
+        ORDER BY embedding <=> $2::vector
+        LIMIT 20
+      `;
+      try {
+        const result = await client.query(semanticQuerySql, folderFilter2.params);
+        semanticRows = result.rows;
+      } catch (err) {
+        console.warn("[RAG] Semantic search failed, falling back to lexical only:", err.message);
+      }
+    }
+    const lexicalParams = [userId, query, `%${query}%`];
+    let lIdx = 4;
+    let fileFilterSql = "";
+    if (fileIds && fileIds.length > 0) {
+      fileFilterSql += ` AND file_id = ANY($${lIdx++})`;
+      lexicalParams.push(fileIds);
+    }
+    const folderFilter = buildFolderFilter(lIdx, lexicalParams);
+    lIdx = folderFilter.nextIdx;
+    const lexicalQuerySql = `
+      SELECT id, content, file_id, (SELECT title FROM files WHERE id = file_id) as title,
+             ts_rank(to_tsvector('english', content), plainto_tsquery('english', $2)) as fts_rank
+      FROM legal_document_chunks
+      WHERE user_id = $1
+        AND (to_tsvector('english', content) @@ plainto_tsquery('english', $2) OR content ILIKE $3)
+        ${fileFilterSql}
+        ${folderFilter.sql}
+      ORDER BY fts_rank DESC, id
+      LIMIT 20
+    `;
+    let lexicalRows = [];
+    try {
+      const { rows } = await client.query(lexicalQuerySql, folderFilter.params);
+      lexicalRows = rows;
+    } catch (lexErr) {
+      console.warn("[RAG] Lexical query failed:", lexErr.message);
+    }
+    if (semanticRows.length === 0 && lexicalRows.length === 0) {
+      console.log("[searchHybrid] Primary queries returned 0 results \u2014 attempting broad fallback scan");
+      const broadTerms = [
+        "indemnity",
+        "liability",
+        "termination",
+        "confidential",
+        "intellectual property",
+        "payment",
+        "governing law",
+        "compliance",
+        "data protection",
+        "obligation"
+      ];
+      const broadPattern = `%(${broadTerms.join("|")})%`;
+      const broadParams = [userId];
+      let bIdx = 2;
+      let bFileFilterSql = "";
+      if (fileIds && fileIds.length > 0) {
+        bFileFilterSql += ` AND file_id = ANY($${bIdx++})`;
+        broadParams.push(fileIds);
+      }
+      const bFolderFilter = buildFolderFilter(bIdx, broadParams);
+      bIdx = bFolderFilter.nextIdx;
+      const broadSql = `
+        SELECT id, content, file_id, (SELECT title FROM files WHERE id = file_id) as title,
+               1.0 as fts_rank
+        FROM legal_document_chunks
+        WHERE user_id = $1
+          ${bFileFilterSql}
+          ${bFolderFilter.sql}
+          AND content ~* $${bIdx}
+        LIMIT 20
+      `;
+      try {
+        const { rows: broadRows } = await client.query(broadSql, bFolderFilter.params.concat([broadPattern]));
+        if (broadRows.length > 0) {
+          console.log(`[searchHybrid] Broad fallback returned ${broadRows.length} chunk(s)`);
+          lexicalRows = broadRows;
+        } else {
+          console.log("[searchHybrid] Broad fallback also empty \u2014 returning any available chunks in scope");
+          const anyParams = [userId];
+          let aIdx = 2;
+          let aFileFilterSql = "";
+          if (fileIds && fileIds.length > 0) {
+            aFileFilterSql += ` AND file_id = ANY($${aIdx++})`;
+            anyParams.push(fileIds);
+          }
+          const aFolderFilter = buildFolderFilter(aIdx, anyParams);
+          const anySql = `
+            SELECT id, content, file_id, (SELECT title FROM files WHERE id = file_id) as title,
+                   0.5 as fts_rank
+            FROM legal_document_chunks
+            WHERE user_id = $1
+              ${aFileFilterSql}
+              ${aFolderFilter.sql}
+            ORDER BY chunk_index ASC
+            LIMIT 20
+          `;
+          const { rows: anyRows } = await client.query(anySql, aFolderFilter.params);
+          console.log(`[searchHybrid] Last-resort scan returned ${anyRows.length} chunk(s)`);
+          lexicalRows = anyRows;
+        }
+      } catch (broadErr) {
+        console.warn("[RAG] Broad fallback failed:", broadErr.message);
+      }
+    }
+    console.log(`[searchHybrid] Final \u2014 semantic: ${semanticRows.length}, lexical: ${lexicalRows.length}`);
+    const rrfMap = /* @__PURE__ */ new Map();
+    semanticRows.forEach((row, index) => {
+      const key = `${row.file_id}_${row.content.substring(0, 50)}`;
+      rrfMap.set(key, { doc: row, semanticRank: index + 1, lexicalRank: Infinity });
+    });
+    lexicalRows.forEach((row, index) => {
+      const key = `${row.file_id}_${row.content.substring(0, 50)}`;
+      if (rrfMap.has(key)) {
+        rrfMap.get(key).lexicalRank = index + 1;
+      } else {
+        rrfMap.set(key, { doc: row, semanticRank: Infinity, lexicalRank: index + 1 });
+      }
+    });
+    const fusedResults = Array.from(rrfMap.values()).map((item) => {
+      const semScore = item.semanticRank === Infinity ? 0 : 1 / (60 + item.semanticRank);
+      const lexScore = item.lexicalRank === Infinity ? 0 : 1 / (60 + item.lexicalRank);
+      const rrfScore = semScore * 0.7 + lexScore * 0.3;
+      return {
+        ...item.doc,
+        rrfScore
+      };
+    });
+    fusedResults.sort((a, b) => b.rrfScore - a.rrfScore);
+    const finalResults = fusedResults.slice(0, 5);
+    console.log(`[searchHybrid] Returning ${finalResults.length} chunk(s): ${finalResults.map((r) => r.title ?? r.file_id).join(", ")}`);
+    return finalResults;
+  });
+}
+async function reindexUnchunkedDocuments(userId) {
+  const { decrypt: decrypt2 } = await Promise.resolve().then(() => (init_crypto(), crypto_exports));
+  const { rows: files } = await pool.query(
+    `SELECT f.id, f.content, f.is_encrypted
+     FROM files f
+     WHERE f.creator_id = $1
+       AND NOT EXISTS (
+         SELECT 1 FROM legal_document_chunks ldc WHERE ldc.file_id = f.id
+       )
+       AND f.content IS NOT NULL
+       AND f.content <> ''`,
+    [userId]
+  );
+  let indexed = 0;
+  let skipped = 0;
+  for (const file of files) {
+    try {
+      const plaintext = file.is_encrypted ? decrypt2(file.content) : file.content;
+      if (!plaintext || plaintext.trim().length < 30) {
+        skipped++;
+        continue;
+      }
+      await chunkAndIndexDocument(file.id, plaintext, userId);
+      indexed++;
+      console.log(`[reindexUnchunkedDocuments] Indexed file ${file.id} for user ${userId}`);
+    } catch (err) {
+      console.warn(`[reindexUnchunkedDocuments] Failed for file ${file.id}:`, err.message);
+      skipped++;
+    }
+  }
+  console.log(`[reindexUnchunkedDocuments] Done \u2014 indexed: ${indexed}, skipped: ${skipped}`);
+  return { indexed, skipped };
 }
 
 // backend/src/controllers/admin.ts
@@ -313,16 +723,44 @@ var getPendingUsers = async (req, res) => {
     res.status(500).json({ error: "Failed to fetch pending users." });
   }
 };
+var reindexChunks = async (req, res) => {
+  const targetUserId = req.body?.userId;
+  try {
+    if (targetUserId) {
+      const result = await reindexUnchunkedDocuments(targetUserId);
+      return res.json({ success: true, userId: targetUserId, ...result });
+    }
+    const { rows: users } = await pool.query("SELECT id FROM users");
+    let totalIndexed = 0;
+    let totalSkipped = 0;
+    for (const user of users) {
+      const result = await reindexUnchunkedDocuments(user.id);
+      totalIndexed += result.indexed;
+      totalSkipped += result.skipped;
+    }
+    return res.json({ success: true, totalIndexed, totalSkipped });
+  } catch (err) {
+    console.error("[reindexChunks] Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
 
 // backend/src/routes/admin.ts
 var router2 = Router2();
 router2.patch("/users/update", authenticateToken, isAdmin, approveUser);
 router2.get("/users", authenticateToken, isAdmin, getAllUsers);
 router2.get("/pending-users", authenticateToken, isAdmin, getPendingUsers);
+router2.post("/reindex-chunks", authenticateToken, isAdmin, reindexChunks);
 var admin_default = router2;
 
 // backend/src/routes/documents.ts
 import { Router as Router3 } from "express";
+
+// backend/src/controllers/documents.ts
+init_database();
+
+// backend/src/services/jobQueue.ts
+init_database();
 
 // backend/src/services/openRouterClient.ts
 var OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
@@ -412,18 +850,56 @@ async function openRouterComplete(systemPrompt, userPrompt, options = {}) {
 
 // backend/src/agents/analysisAgent.ts
 import { z } from "zod";
-var AuditSchema = z.object({
-  summary: z.string(),
-  risks: z.array(
+var FindingSchema = z.object({
+  id: z.string(),
+  clauseTitle: z.string(),
+  clauseText: z.string().optional(),
+  severity: z.enum(["low", "medium", "high"]),
+  category: z.enum([
+    "indemnity",
+    "liability",
+    "termination",
+    "ip",
+    "confidentiality",
+    "payment",
+    "compliance",
+    "data_protection",
+    "governing_law",
+    "other"
+  ]),
+  issue: z.string(),
+  whyItMatters: z.string(),
+  recommendation: z.string(),
+  fallbackPosition: z.string().optional(),
+  sourceExcerpt: z.string().optional()
+});
+var RichAuditSchema = z.object({
+  executiveSummary: z.string(),
+  overallRisk: z.enum(["low", "medium", "high"]),
+  documentType: z.string().optional(),
+  keyTerms: z.object({
+    parties: z.array(z.string()).default([]),
+    governingLaw: z.string().optional(),
+    liabilityCap: z.string().optional(),
+    terminationNotice: z.string().optional(),
+    paymentTerms: z.array(z.string()).default([]),
+    indemnityScope: z.string().optional(),
+    confidentialityTerm: z.string().optional()
+  }),
+  findings: z.array(FindingSchema),
+  missingClauses: z.array(
     z.object({
-      id: z.string(),
-      clause: z.string(),
-      severity: z.enum(["low", "medium", "high"]),
-      risk_level: z.string(),
-      reasons: z.array(z.string()),
-      description: z.string(),
-      actionableInsight: z.string(),
-      remediation: z.string().optional()
+      clauseName: z.string(),
+      reason: z.string(),
+      recommendation: z.string()
+    })
+  ),
+  obligations: z.array(
+    z.object({
+      party: z.string().optional(),
+      obligation: z.string(),
+      deadline: z.string().optional(),
+      trigger: z.string().optional()
     })
   ),
   complianceGaps: z.array(
@@ -433,9 +909,35 @@ var AuditSchema = z.object({
       severity: z.string(),
       remediation: z.string()
     })
+  ),
+  recommendedRedlines: z.array(
+    z.object({
+      clauseTitle: z.string(),
+      currentIssue: z.string(),
+      suggestedRevision: z.string()
+    })
   )
 });
+function addLegacyAliases(audit) {
+  return {
+    ...audit,
+    // Flat alias so existing consumers that read .summary don't break
+    summary: audit.executiveSummary,
+    // Map findings → risks so DashboardHome.tsx analysis.risks.length still works
+    risks: audit.findings.map((f) => ({
+      id: f.id,
+      clause: f.clauseText ?? f.clauseTitle,
+      severity: f.severity,
+      risk_level: f.category,
+      reasons: [f.whyItMatters],
+      description: f.issue,
+      actionableInsight: f.recommendation,
+      remediation: f.fallbackPosition ?? f.recommendation
+    }))
+  };
+}
 var AnalysisAgent = class {
+  // ── Keep intact: used by interactAnalyze ──────────────────────────────────
   async analyzeDocuments(contents, prompt) {
     const combinedContent = contents.join("\n\n---\n\n");
     const systemPrompt = `You are a Senior Compliance Officer.
@@ -458,54 +960,96 @@ ${combinedContent}`;
     try {
       return await openRouterComplete(systemPrompt, userPrompt);
     } catch (err) {
-      console.error("AnalysisAgent error:", err);
+      console.error("AnalysisAgent.analyzeDocuments error:", err);
       throw err;
     }
   }
-  async runAudit(content, type) {
-    const systemPrompt = `You are a Risk Assessment Agent trained on enterprise liability guidelines.
+  // ── Primary audit method ──────────────────────────────────────────────────
+  async runAudit(params) {
+    const { content, type, referenceContext } = params;
+    const referenceSection = referenceContext ? `
 
-Audit the document for:
-1. Indemnity Caps
-2. IP Ownership
-3. Termination Rights
-4. Liability Exposure
-5. Compliance Risks
-6. Regulatory Gaps
+[REFERENCE CONTEXT FROM RELATED DOCUMENTS]
+${referenceContext}
+` : "";
+    const systemPrompt = `You are an expert Legal Counsel and Risk Assessment Agent specialising in commercial contract review.
 
-Audit Type: ${type}
+Perform a thorough legal audit for a ${type} document. Your output must be a practical legal review grounded in the actual document text.
 
-CRITICAL:
-You must return ONLY a valid JSON object \u2014 no markdown fences, no commentary.
+Instructions:
+- Ground every finding in actual clauses or text present in the document
+- Include the verbatim clause text or a short source excerpt wherever possible
+- Identify missing standard protections that a commercial agreement of this type should contain
+- Provide practical recommendations AND a fallback negotiation position for each finding
+- Do not hallucinate clauses, facts, or parties that are not present in the document
+- If you cannot determine a value (e.g. governing law not stated), mark it as null or omit it
+- Return ONLY a valid JSON object \u2014 absolutely no markdown fences, no commentary, no preamble
+
 The JSON must exactly match this schema:
-
 {
-  "summary": "High-level audit summary",
-  "risks": [
+  "executiveSummary": "2-4 sentence plain English summary of the document and its key risks",
+  "overallRisk": "low | medium | high",
+  "documentType": "type of legal document, e.g. NDA, SLA, MSA, Employment Agreement",
+  "keyTerms": {
+    "parties": ["Party A name", "Party B name"],
+    "governingLaw": "jurisdiction or null",
+    "liabilityCap": "cap amount/formula or null",
+    "terminationNotice": "notice period or null",
+    "paymentTerms": ["payment term 1", "payment term 2"],
+    "indemnityScope": "brief description or null",
+    "confidentialityTerm": "duration or null"
+  },
+  "findings": [
     {
-      "id": "unique_id",
-      "clause": "Specific clause text",
+      "id": "finding_1",
+      "clauseTitle": "Short clause name",
+      "clauseText": "Verbatim or paraphrased clause text",
       "severity": "low | medium | high",
-      "risk_level": "Tier title",
-      "reasons": ["Reason 1", "Reason 2"],
-      "description": "Risk explanation",
-      "actionableInsight": "Recommended action",
-      "remediation": "Balanced replacement wording"
+      "category": "indemnity | liability | termination | ip | confidentiality | payment | compliance | data_protection | governing_law | other",
+      "issue": "Specific legal problem with this clause",
+      "whyItMatters": "Business/legal consequences if unaddressed",
+      "recommendation": "Concrete suggested change",
+      "fallbackPosition": "Minimum acceptable negotiation position",
+      "sourceExcerpt": "Exact quote from document supporting this finding"
+    }
+  ],
+  "missingClauses": [
+    {
+      "clauseName": "Name of missing clause",
+      "reason": "Why this clause is normally expected in this document type",
+      "recommendation": "What to add"
+    }
+  ],
+  "obligations": [
+    {
+      "party": "Party name or 'Both parties'",
+      "obligation": "Description of the obligation",
+      "deadline": "Deadline or timeframe if specified",
+      "trigger": "Event that triggers the obligation"
     }
   ],
   "complianceGaps": [
     {
-      "regulation": "GDPR/CCPA/etc",
-      "issue": "Gap description",
-      "severity": "RED/YELLOW/GREEN",
+      "regulation": "GDPR / CCPA / DPDPA / etc",
+      "issue": "Specific gap",
+      "severity": "RED | YELLOW | GREEN",
       "remediation": "How to resolve"
+    }
+  ],
+  "recommendedRedlines": [
+    {
+      "clauseTitle": "Clause to redline",
+      "currentIssue": "What is wrong",
+      "suggestedRevision": "Proposed replacement language"
     }
   ]
 }`;
-    const userPrompt = `Document Content to Audit:
-
-${content}`;
+    const userPrompt = `Document Type Context: ${type}
+${referenceSection}
+[DOCUMENT TO AUDIT]
+${content.substring(0, 14e3)}`;
     try {
+      console.log(`[AnalysisAgent] Running rich audit via OpenRouter (type: ${type}, refContext: ${referenceContext ? "yes" : "no"})`);
       let responseText = await openRouterComplete(systemPrompt, userPrompt, {
         jsonMode: true
       });
@@ -514,71 +1058,89 @@ ${content}`;
         responseText = responseText.replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/\s*```$/i, "").trim();
       }
       const parsed = JSON.parse(responseText);
-      if (parsed.risks && Array.isArray(parsed.risks)) {
-        parsed.risks = parsed.risks.map((risk) => ({
-          ...risk,
-          remediation: risk.remediation || risk.reremediation || "No remediation provided."
-        }));
-      }
-      return AuditSchema.parse(parsed);
+      parsed.keyTerms = parsed.keyTerms ?? {};
+      parsed.keyTerms.parties = Array.isArray(parsed.keyTerms?.parties) ? parsed.keyTerms.parties : [];
+      parsed.keyTerms.paymentTerms = Array.isArray(parsed.keyTerms?.paymentTerms) ? parsed.keyTerms.paymentTerms : [];
+      parsed.findings = Array.isArray(parsed.findings) ? parsed.findings : [];
+      parsed.missingClauses = Array.isArray(parsed.missingClauses) ? parsed.missingClauses : [];
+      parsed.obligations = Array.isArray(parsed.obligations) ? parsed.obligations : [];
+      parsed.complianceGaps = Array.isArray(parsed.complianceGaps) ? parsed.complianceGaps : [];
+      parsed.recommendedRedlines = Array.isArray(parsed.recommendedRedlines) ? parsed.recommendedRedlines : [];
+      parsed.findings = parsed.findings.map((f, i) => ({
+        ...f,
+        id: f.id || `finding_${i + 1}`
+      }));
+      const validated = RichAuditSchema.parse(parsed);
+      return addLegacyAliases(validated);
     } catch (err) {
       console.warn(
-        "AI audit failed or schema validation error. Falling back to heuristics.",
+        "[AnalysisAgent] AI audit failed or schema validation error. Falling back to heuristics.",
         err
       );
       return this.heuristicAudit(content, type);
     }
   }
+  // ── Heuristic fallback — returns the full richer shape ───────────────────
   heuristicAudit(content, type) {
-    const risks = [];
+    const findings = [];
     const lowerContent = content.toLowerCase();
     if (lowerContent.includes("liquidated damages")) {
-      risks.push({
-        id: "h_risk_1",
-        clause: "Liquidated damages clause detected",
+      findings.push({
+        id: "h_finding_1",
+        clauseTitle: "Liquidated Damages",
+        clauseText: "Liquidated damages clause detected",
         severity: "high",
-        risk_level: "CRITICAL",
-        reasons: [
-          "Potential uncapped liability",
-          "May expose parties to excessive penalties"
-        ],
-        description: "Liquidated damages clauses can become punitive if not reasonably linked to actual loss.",
-        actionableInsight: "Negotiate for actual proven damages and establish liability caps.",
-        remediation: "Replace liquidated damages with direct, proven damages subject to an agreed liability cap."
+        category: "liability",
+        issue: "Liquidated damages clauses can become punitive if not reasonably linked to actual loss.",
+        whyItMatters: "Uncapped liability may expose a party to excessive financial penalties disproportionate to actual loss.",
+        recommendation: "Negotiate for actual proven damages and establish a reasonable liability cap.",
+        fallbackPosition: "Accept liquidated damages only if capped at total contract value.",
+        sourceExcerpt: "Liquidated damages clause detected in document."
       });
     }
     if (lowerContent.includes("all intellectual property") || lowerContent.includes("exclusive ownership")) {
-      risks.push({
-        id: "h_risk_2",
-        clause: "Broad IP ownership language detected",
+      findings.push({
+        id: "h_finding_2",
+        clauseTitle: "Broad IP Ownership",
+        clauseText: "Broad intellectual property ownership language detected",
         severity: "medium",
-        risk_level: "IMPORTANT",
-        reasons: [
-          "Potential loss of ownership rights",
-          "Ambiguous IP assignment scope"
-        ],
-        description: "The clause may transfer ownership of pre-existing intellectual property.",
-        actionableInsight: "Clearly distinguish background IP from newly created deliverables.",
-        remediation: "Limit assignment to project deliverables and retain ownership of pre-existing IP."
+        category: "ip",
+        issue: "The clause may transfer ownership of pre-existing intellectual property without limitation.",
+        whyItMatters: "Ambiguous IP assignment can result in loss of background IP and pre-existing technology.",
+        recommendation: "Clearly distinguish background IP from newly created deliverables.",
+        fallbackPosition: "Limit assignment to project-specific deliverables only.",
+        sourceExcerpt: "All intellectual property / exclusive ownership language detected."
       });
     }
     if (lowerContent.includes("terminate immediately") && !lowerContent.includes("notice")) {
-      risks.push({
-        id: "h_risk_3",
-        clause: "Immediate termination without notice",
+      findings.push({
+        id: "h_finding_3",
+        clauseTitle: "Immediate Termination Without Notice",
+        clauseText: "Terminate immediately clause with no notice period detected",
         severity: "medium",
-        risk_level: "WARNING",
-        reasons: ["No cure period", "Operational disruption risk"],
-        description: "Immediate termination rights without notice may create business continuity risks.",
-        actionableInsight: "Add notice and cure periods before termination.",
-        remediation: "Require at least 30 days' written notice and a cure period before termination."
+        category: "termination",
+        issue: "Immediate termination rights without a notice or cure period create operational disruption risk.",
+        whyItMatters: "A party may lose all contractual benefits without an opportunity to remedy a breach.",
+        recommendation: "Add a minimum notice period and a cure window before termination becomes effective.",
+        fallbackPosition: "Accept 15-day notice minimum with a 10-day cure period.",
+        sourceExcerpt: "Terminate immediately language detected without accompanying notice provision."
       });
     }
-    return {
-      summary: `Heuristic audit completed for document type: ${type}.`,
-      risks,
-      complianceGaps: []
+    const richResult = {
+      executiveSummary: `Heuristic audit completed for document type: ${type}. ${findings.length} potential risk indicator(s) were detected based on keyword analysis. A full AI-powered review is recommended.`,
+      overallRisk: findings.some((f) => f.severity === "high") ? "high" : findings.some((f) => f.severity === "medium") ? "medium" : "low",
+      documentType: type,
+      keyTerms: {
+        parties: [],
+        paymentTerms: []
+      },
+      findings,
+      missingClauses: [],
+      obligations: [],
+      complianceGaps: [],
+      recommendedRedlines: []
     };
+    return addLegacyAliases(richResult);
   }
 };
 
@@ -627,161 +1189,127 @@ Provide detailed negotiation advice and specific clause redlines.`;
 
 // backend/src/agents/askLawyerAgent.ts
 var AskLawyerAgent = class {
-  async getAdvice(prompt, context) {
-    const systemPrompt = `You are a Senior Legal Counsel. Provide professional legal advice based on the following context.
-If the information is not in the context, state that you are advising based on general legal principles but recommend consulting with specific jurisdictional counsel.
+  /**
+   * Upgraded Ask AI Lawyer agent with jurisdiction awareness, output format control,
+   * and document-grounded structured analysis.
+   */
+  async getAdvice(options) {
+    const {
+      prompt,
+      context,
+      jurisdictions = [],
+      outputFormat = "Full IRAC",
+      sources = []
+    } = options;
+    const jurisdictionClause = jurisdictions.length > 0 ? `
 
-IMPORTANT: Return your response in clean Markdown format.`;
-    const userPrompt = `[CONTEXT]
-${context}
+**JURISDICTIONAL SCOPE:** Your analysis must prioritize and reference legal principles, statutes, and case law from the following jurisdictions: ${jurisdictions.join(", ")}. Where the retrieved documents or general principles do not clearly cover these jurisdictions, state that assumption explicitly and recommend jurisdiction-specific counsel.` : "";
+    const formatInstructions = this.getFormatInstructions(outputFormat);
+    const systemPrompt = `You are a Senior Legal Counsel specializing in commercial contract law, regulatory compliance, and risk assessment.
+
+Your task is to provide **document-grounded, jurisdiction-aware, structured legal analysis** based on the retrieved document context provided below.${jurisdictionClause}
+
+${formatInstructions}
+
+**CRITICAL RULES:**
+1. **Ground your analysis in the retrieved document context wherever possible.** Quote or paraphrase relevant clauses. If the context does not support a point, clearly state: "The retrieved documents do not address this issue \u2014 the following is based on general legal principles."
+2. **Clearly separate:**
+   - Conclusions grounded in the provided documents
+   - General legal principles applied when context is insufficient
+3. **Provide practical, actionable legal analysis** \u2014 not vague generic advice.
+4. **Identify risks, ambiguities, and assumptions** where the documents are unclear or incomplete.
+5. **Include practical recommendations / next steps** at the end.
+6. **Return clean, well-structured Markdown** with headers, bullet points, and bold text for readability.
+
+If the retrieved document context is weak or empty, you must still provide a structured answer using general legal principles, but clearly label it as such and recommend that the user consult jurisdiction-specific counsel or provide more specific documents.`;
+    const userPrompt = `[RETRIEVED DOCUMENT CONTEXT]
+${context || "\u26A0\uFE0F No document chunks were retrieved. You must rely on general legal principles and clearly state where assumptions are made."}
 
 [USER QUERY]
-${prompt}`;
+${prompt}
+
+Provide your analysis using the required ${outputFormat} structure.`;
     try {
       const result = await openRouterComplete(systemPrompt, userPrompt);
-      return result || "I cannot answer this query right now.";
+      const text = result || "I cannot answer this query right now.";
+      const sourcesMetadata = sources.length > 0 ? sources.map((s, idx) => ({
+        id: `src_${idx + 1}`,
+        title: s.title || "Untitled Document",
+        file_id: s.file_id,
+        excerpt: s.content.substring(0, 200) + (s.content.length > 200 ? "..." : "")
+      })) : void 0;
+      return { text, sources: sourcesMetadata };
     } catch (err) {
       console.error("AskLawyerAgent error:", err);
       throw err;
     }
   }
+  getFormatInstructions(format) {
+    switch (format) {
+      case "Brief Summary":
+        return `**OUTPUT FORMAT: Brief Summary**
+
+Structure your answer as follows:
+1. **Executive Summary** (2-4 sentences): Concise answer to the user's query.
+2. **Key Points** (3-5 bullet points): Core legal principles or document findings.
+3. **Risks / Ambiguities** (2-3 bullet points): Gaps, assumptions, or areas of concern.
+4. **Practical Recommendation** (1-2 sentences): Clear next step or actionable advice.
+
+Keep the answer **concise and practical** \u2014 no more than 300-400 words total.`;
+      case "Full IRAC":
+        return `**OUTPUT FORMAT: Full IRAC (Issue, Rule, Application, Conclusion)**
+
+Structure your answer as follows:
+
+### ISSUE
+State the legal question or problem clearly in 1-2 sentences.
+
+### RULE
+Explain the relevant legal principles, statutes, or contract provisions that apply. If grounded in the retrieved documents, quote or cite the specific clause/section. If based on general legal principles, state that explicitly.
+
+### APPLICATION
+Apply the rule to the facts or document provisions retrieved. Analyze how the rule interacts with the user's situation. Identify risks, ambiguities, or gaps in the documents.
+
+### CONCLUSION
+Provide a clear conclusion that answers the user's query. Include:
+- The likely legal outcome or interpretation
+- Practical next steps or recommendations
+- Any disclaimers about jurisdiction or missing information
+
+Use **clear headers** for each section and bullet points where appropriate.`;
+      case "CREAC":
+        return `**OUTPUT FORMAT: CREAC (Conclusion, Rule, Explanation, Application, Conclusion)**
+
+Structure your answer as follows:
+
+### CONCLUSION (Short Answer)
+Provide a direct, concise answer to the user's query in 2-3 sentences.
+
+### RULE
+Explain the relevant legal principles, statutes, or contract provisions. If grounded in the retrieved documents, quote or cite the specific clause. If based on general legal principles, state that explicitly.
+
+### EXPLANATION OF RULE
+Elaborate on how the rule works, its purpose, and any relevant nuances or exceptions. Reference case law, regulatory guidance, or contract interpretation principles where applicable.
+
+### APPLICATION
+Apply the rule to the facts or document provisions. Analyze the interaction between the rule and the user's situation. Highlight risks, ambiguities, or missing protections.
+
+### CONCLUSION (Full Answer)
+Restate and expand on the conclusion. Include:
+- Detailed legal outcome or interpretation
+- Practical recommendations / next steps
+- Disclaimers about jurisdiction, assumptions, or areas requiring further research
+
+Use **clear headers** and bullet points for readability.`;
+      default:
+        return "";
+    }
+  }
 };
 
-// backend/src/RAG/ragService.ts
-function sanitizeText(text) {
-  return text.replace(/\0/g, "");
-}
-function splitIntoClauseAwareChunks(content) {
-  const paragraphs = content.split(/\n\n+/);
-  const chunks = [];
-  let currentChunk = "";
-  const maxChunkLength = 800;
-  const overlapLength = 150;
-  for (const para of paragraphs) {
-    const trimmed = para.trim();
-    if (!trimmed) continue;
-    if ((currentChunk + "\n\n" + trimmed).length <= maxChunkLength) {
-      currentChunk = currentChunk ? currentChunk + "\n\n" + trimmed : trimmed;
-    } else {
-      if (currentChunk) chunks.push(currentChunk);
-      const lastPart = currentChunk.substring(Math.max(0, currentChunk.length - overlapLength));
-      const overlapText = lastPart.includes("\n") ? lastPart.substring(lastPart.indexOf("\n") + 1) : lastPart;
-      currentChunk = overlapText ? overlapText.trim() + "\n\n" + trimmed : trimmed;
-    }
-  }
-  if (currentChunk) {
-    chunks.push(currentChunk);
-  }
-  return chunks.filter((c) => c.trim().length > 15);
-}
-async function embedText(_text) {
-  return null;
-}
-async function chunkAndIndexDocument(fileId, content, userId) {
-  const cleanedContent = sanitizeText(content);
-  const chunks = splitIntoClauseAwareChunks(cleanedContent);
-  const processedChunks = [];
-  for (let i = 0; i < chunks.length; i++) {
-    const vector = await embedText(chunks[i]);
-    processedChunks.push({
-      index: i,
-      content: chunks[i],
-      // null embedding stored as NULL — chunk is still searchable via lexical search
-      embedding: vector ? `[${vector.join(",")}]` : null
-    });
-  }
-  await withTransaction(userId, "USER", async (client) => {
-    for (const chunk of processedChunks) {
-      await client.query(
-        "INSERT INTO legal_document_chunks (file_id, user_id, chunk_index, content, embedding) VALUES ($1, $2, $3, $4, $5)",
-        [fileId, userId, chunk.index, chunk.content, chunk.embedding]
-      );
-    }
-  });
-}
-async function searchHybrid(query, userId, fileIds, folderIds) {
-  const embedding = await embedText(query);
-  const hasEmbedding = embedding !== null;
-  const vectorStr = hasEmbedding ? `[${embedding.join(",")}]` : null;
-  return await withTransaction(userId, "USER", async (client) => {
-    let semanticRows = [];
-    if (hasEmbedding) {
-      let semanticFilterSql = "";
-      const semanticParams = [userId, vectorStr];
-      let sIdx = 3;
-      if (fileIds && fileIds.length > 0) {
-        semanticFilterSql += ` AND file_id = ANY($${sIdx++})`;
-        semanticParams.push(fileIds);
-      }
-      if (folderIds && folderIds.length > 0) {
-        semanticFilterSql += ` AND file_id IN (SELECT id FROM files WHERE folder_id = ANY($${sIdx++}))`;
-        semanticParams.push(folderIds);
-      }
-      const semanticQuerySql = `
-        SELECT id, content, file_id, (SELECT title FROM files WHERE id = file_id) as title
-        FROM legal_document_chunks
-        WHERE user_id = $1
-        ${semanticFilterSql}
-        ORDER BY embedding <=> $2::vector
-        LIMIT 20
-      `;
-      try {
-        const result = await client.query(semanticQuerySql, semanticParams);
-        semanticRows = result.rows;
-      } catch (err) {
-        console.warn("[RAG] Semantic search failed, falling back to lexical only:", err.message);
-      }
-    }
-    let lexicalFilterSql = "";
-    const lexicalParams = [userId, query, `%${query}%`];
-    let lIdx = 4;
-    if (fileIds && fileIds.length > 0) {
-      lexicalFilterSql += ` AND file_id = ANY($${lIdx++})`;
-      lexicalParams.push(fileIds);
-    }
-    if (folderIds && folderIds.length > 0) {
-      lexicalFilterSql += ` AND file_id IN (SELECT id FROM files WHERE folder_id = ANY($${lIdx++}))`;
-      lexicalParams.push(folderIds);
-    }
-    const lexicalQuerySql = `
-      SELECT id, content, file_id, (SELECT title FROM files WHERE id = file_id) as title,
-             ts_rank(to_tsvector('english', content), plainto_tsquery('english', $2)) as fts_rank
-      FROM legal_document_chunks
-      WHERE user_id = $1
-        AND (to_tsvector('english', content) @@ plainto_tsquery('english', $2) OR content ILIKE $3)
-        ${lexicalFilterSql}
-      ORDER BY fts_rank DESC, id
-      LIMIT 20
-    `;
-    const { rows: lexicalRows } = await client.query(lexicalQuerySql, lexicalParams);
-    const rrfMap = /* @__PURE__ */ new Map();
-    semanticRows.forEach((row, index) => {
-      const key = `${row.file_id}_${row.content.substring(0, 50)}`;
-      rrfMap.set(key, { doc: row, semanticRank: index + 1, lexicalRank: Infinity });
-    });
-    lexicalRows.forEach((row, index) => {
-      const key = `${row.file_id}_${row.content.substring(0, 50)}`;
-      if (rrfMap.has(key)) {
-        rrfMap.get(key).lexicalRank = index + 1;
-      } else {
-        rrfMap.set(key, { doc: row, semanticRank: Infinity, lexicalRank: index + 1 });
-      }
-    });
-    const fusedResults = Array.from(rrfMap.values()).map((item) => {
-      const semScore = item.semanticRank === Infinity ? 0 : 1 / (60 + item.semanticRank);
-      const lexScore = item.lexicalRank === Infinity ? 0 : 1 / (60 + item.lexicalRank);
-      const rrfScore = semScore * 0.7 + lexScore * 0.3;
-      return {
-        ...item.doc,
-        rrfScore
-      };
-    });
-    fusedResults.sort((a, b) => b.rrfScore - a.rrfScore);
-    return fusedResults.slice(0, 5);
-  });
-}
-
 // backend/src/agents/legalAgent.ts
+init_database();
+var REFERENCE_RETRIEVAL_QUERY = "indemnity liability limitation of liability termination IP confidentiality data protection governing law payment obligations compliance missing clauses";
 var AgentOrchestrator = class {
   constructor() {
     this.analysisAgent = new AnalysisAgent();
@@ -790,7 +1318,35 @@ var AgentOrchestrator = class {
     this.askLawyerAgent = new AskLawyerAgent();
   }
   async runAnalysis(documentId, content, userId, folderIds, userRole = "USER") {
-    const audit = await this.analysisAgent.runAudit(content, "legal");
+    let referenceContext;
+    if (Array.isArray(folderIds) && folderIds.length > 0) {
+      try {
+        const chunks = await searchHybrid(
+          REFERENCE_RETRIEVAL_QUERY,
+          userId,
+          void 0,
+          // fileIds
+          folderIds
+        );
+        if (chunks.length > 0) {
+          referenceContext = chunks.map((c) => `[Reference: ${c.title ?? "Untitled"}]
+${c.content}`).join("\n\n");
+          console.log(
+            `[runAnalysis] Retrieved ${chunks.length} reference chunk(s) from ${folderIds.length} folder(s)`
+          );
+        }
+      } catch (refErr) {
+        console.warn(
+          "[runAnalysis] Reference context retrieval failed, continuing without it:",
+          refErr.message
+        );
+      }
+    }
+    const audit = await this.analysisAgent.runAudit({
+      content,
+      type: "legal",
+      referenceContext
+    });
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
@@ -801,13 +1357,19 @@ var AgentOrchestrator = class {
         documentId
       ]);
       await client.query(
-        "INSERT INTO agent_execution_logs (file_id, user_id, agent_name, task_name, decisions, confidence_score) VALUES ($1, $2, $3, $4, $5, $6)",
+        `INSERT INTO agent_execution_logs
+           (file_id, user_id, agent_name, task_name, decisions, confidence_score)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
         [
           documentId,
           userId,
           "AnalysisAgent",
           "Legal Audit",
-          JSON.stringify({ summary: audit.summary }),
+          JSON.stringify({
+            executiveSummary: audit.executiveSummary,
+            overallRisk: audit.overallRisk,
+            findingsCount: audit.findings.length
+          }),
           95
         ]
       );
@@ -831,27 +1393,131 @@ var AgentOrchestrator = class {
       instructions
     );
   }
-  async askLawyer(prompt, userId, documentIds) {
+  async askLawyer(prompt, userId, documentIds, jurisdictions, outputFormat) {
     const context = await searchHybrid(prompt, userId, documentIds);
     const contextText = context.map((c) => `[Source: ${c.title}]
 ${c.content}`).join("\n\n");
-    return await this.askLawyerAgent.getAdvice(prompt, contextText);
+    const result = await this.askLawyerAgent.getAdvice({
+      prompt,
+      context: contextText,
+      jurisdictions,
+      outputFormat,
+      sources: context.map((c) => ({ title: c.title, file_id: c.file_id, content: c.content }))
+    });
+    return result;
   }
   async remediate(documentId, content, userId, userRole = "USER") {
-    return await this.runAnalysis(documentId, content, userId, void 0, userRole);
+    return await this.runAnalysis(
+      documentId,
+      content,
+      userId,
+      void 0,
+      userRole
+    );
   }
-  async interactAnalyze(folderIds, prompt, userId, documentMode, answerStyle, history, folderId, userRole = "USER") {
-    const context = await searchHybrid(prompt, userId, void 0, folderIds);
-    const contextText = context.map((c) => `[File: ${c.title}]
+  async interactAnalyze(folderIds, prompt, userId, _documentMode, answerStyle, history, _folderId, _userRole = "USER") {
+    const LEGAL_SEED_TERMS = "indemnity liability limitation termination confidentiality intellectual property payment governing law compliance data protection liquidated damages audit rights obligations warranties representations";
+    const retrievalQuery = `${LEGAL_SEED_TERMS} ${prompt.substring(0, 120)}`.trim();
+    console.log(`[interactAnalyze] userId=${userId} folderIds=${JSON.stringify(folderIds)}`);
+    console.log(`[interactAnalyze] userPrompt(100)="${prompt.substring(0, 100)}"`);
+    console.log(`[interactAnalyze] retrievalQuery(120)="${retrievalQuery.substring(0, 120)}"`);
+    const context = await searchHybrid(retrievalQuery, userId, void 0, folderIds);
+    console.log(
+      `[interactAnalyze] Retrieved ${context.length} chunk(s): ` + context.map((c) => `"${c.title ?? c.file_id}"`).join(", ")
+    );
+    const contextText = context.map((c) => `[File: ${c.title ?? "Untitled"}]
 ${c.content}`).join("\n\n");
-    const systemPrompt = `You are a Legal Analyst. Answer the following query based on the provided document context.
-Answer Style: ${answerStyle}
-History: ${JSON.stringify(history)}`;
-    const userPrompt = `[CONTEXT]
-${contextText}
+    const systemPrompt = `You are a Senior Legal Counsel and Compliance Analyst.
 
-[QUERY]
-${prompt}`;
+Your task is to review the provided document context and answer the user's query as a structured legal review report, not as a generic essay.
+
+You must ground your answer in the retrieved document context wherever possible. If the context does not support a point, explicitly say that the reviewed material does not clearly show it. Do not invent clauses, parties, or facts.
+
+Answer Style: ${answerStyle}
+${history.length > 0 ? `Prior conversation context:
+${JSON.stringify(history)}
+` : ""}
+
+CRITICAL OUTPUT RULES:
+1. Return the answer in exactly the Markdown structure below.
+2. Use all section headings below in the same order.
+3. If a section has no strong support in the document context, write "Not clearly identified in the reviewed material." under that section instead of omitting it.
+4. Do NOT write a generic legal explainer or general best-practices essay.
+5. Tie findings to the uploaded/retrieved document context wherever possible.
+6. Under "Key Findings", each finding must follow the exact mini-template shown below.
+7. If the user's query is broad, still convert it into a document-focused legal review instead of answering abstractly.
+8. Do not add a closing question like "Would you like a deeper dive?".
+9. Do not add any extra sections outside the required structure.
+
+Return your answer in this exact format:
+
+# Executive Summary
+Write a 2-4 sentence summary of the document risk picture relevant to the user's query.
+
+# Overall Risk Assessment
+- **Risk Level:** Low / Medium / High
+- **Why:** 2-4 bullets explaining the basis for the rating.
+
+# Key Findings
+For each finding, use this exact structure:
+
+## Finding 1: <short finding title>
+- **Severity:** Low / Medium / High
+- **Relevant Clause / Evidence:** Quote or paraphrase the relevant clause, sentence, or retrieved evidence.
+- **Issue:** Explain the legal/commercial problem.
+- **Why It Matters:** Explain the consequence or risk if unaddressed.
+- **Recommendation:** Give a concrete recommended change.
+- **Fallback Position:** Give a minimum acceptable negotiation fallback.
+
+Add as many findings as are genuinely supported by the document context.
+
+# Missing or Weak Clauses
+For each missing or weak clause:
+- **Clause / Protection:** <name>
+- **Why It Matters:** <brief explanation>
+- **Recommendation:** <what should be added or strengthened>
+
+If nothing specific can be identified, write:
+- Not clearly identified in the reviewed material.
+
+# Compliance Gaps
+For each compliance gap:
+- **Regulation / Framework:** GDPR / CCPA / DPDPA / other
+- **Severity:** RED / YELLOW / GREEN
+- **Gap:** <issue>
+- **Remediation:** <fix>
+
+If no clear compliance gap is visible from the reviewed material, say so explicitly.
+
+# Recommended Redlines
+For each clause that should be revised:
+- **Clause:** <name>
+- **Current Issue:** <problem>
+- **Suggested Revision:** <replacement language or revision direction>
+
+If no specific redline can be proposed from the reviewed material, say so explicitly.
+
+# Obligations & Deadlines
+List obligations in this format:
+- **Party:** <party or "Not specified">
+- **Obligation:** <obligation>
+- **Trigger:** <trigger event or "Not specified">
+- **Deadline:** <deadline or "Not specified">
+
+If none are identifiable, say:
+- Not clearly identifiable from the reviewed material.
+
+IMPORTANT:
+- Prefer document-grounded analysis over generic legal advice.
+- If the context retrieved is weak or incomplete, say that clearly in the relevant sections.
+- Do not add any extra sections outside the required structure.`;
+    const userPrompt = `[DOCUMENT CONTEXT]
+${contextText || "No document chunks were retrieved from the selected folders. You must still use the required report structure, but clearly state where the reviewed material is insufficient."}
+
+[USER TASK]
+User request: ${prompt}
+
+Convert the request into a document-focused legal review report using the required structure. If the request asks about specific risks or clauses, analyze those risks against the reviewed material instead of giving a generic how-to explanation.`;
     try {
       return await openRouterComplete(systemPrompt, userPrompt);
     } catch (err) {
@@ -1465,84 +2131,8 @@ ${JSON.stringify(trackerSummary, null, 2)}`;
   }
 };
 
-// backend/src/utils/crypto.ts
-import crypto2 from "crypto";
-var ENCRYPTION_KEY = process.env.ENCRYPTION_KEY;
-var ALGORITHM = "aes-256-gcm";
-if (!ENCRYPTION_KEY || Buffer.from(ENCRYPTION_KEY).length !== 32) {
-  console.warn("\u26A0\uFE0F [SECURITY] ENCRYPTION_KEY is missing or invalid (must be 32 bytes). Encryption/Decryption features will fail.");
-}
-function encryptData(text) {
-  if (!text) return "";
-  if (!ENCRYPTION_KEY || Buffer.from(ENCRYPTION_KEY).length !== 32) {
-    throw new Error("ENCRYPTION_KEY must be 32 bytes.");
-  }
-  const iv = crypto2.randomBytes(12);
-  const cipher = crypto2.createCipheriv(ALGORITHM, Buffer.from(ENCRYPTION_KEY), iv);
-  let encrypted = cipher.update(text, "utf8", "hex");
-  encrypted += cipher.final("hex");
-  const authTag = cipher.getAuthTag().toString("hex");
-  return `LEXGCM_${iv.toString("hex")}:${authTag}:${encrypted}`;
-}
-function decryptData(text) {
-  if (!text) return "";
-  if (text.startsWith("LEXGCM_")) {
-    try {
-      if (!ENCRYPTION_KEY || Buffer.from(ENCRYPTION_KEY).length !== 32) {
-        throw new Error("ENCRYPTION_KEY must be 32 bytes.");
-      }
-      const payload = text.replace("LEXGCM_", "");
-      const [ivHex, authTagHex, encryptedHex] = payload.split(":");
-      if (!ivHex || !authTagHex || !encryptedHex) {
-        return "[DECRYPTION_FORMAT_ERROR]";
-      }
-      const iv = Buffer.from(ivHex, "hex");
-      const authTag = Buffer.from(authTagHex, "hex");
-      const decipher = crypto2.createDecipheriv(ALGORITHM, Buffer.from(ENCRYPTION_KEY), iv);
-      decipher.setAuthTag(authTag);
-      let decrypted = decipher.update(encryptedHex, "hex", "utf8");
-      decrypted += decipher.final("utf8");
-      return decrypted;
-    } catch (err) {
-      console.error("Decryption failed:", err);
-      (async () => {
-        let client;
-        try {
-          client = await pool.connect();
-          await client.query("BEGIN");
-          await client.query("SET LOCAL app.current_user_role = 'ADMIN'");
-          await client.query(`
-            INSERT INTO compliance_audit_logs (user_id, action_type, metadata)
-            VALUES ($1, $2, $3)
-          `, [null, "decryption_failure", JSON.stringify({ error: err.message, timestamp: (/* @__PURE__ */ new Date()).toISOString() })]);
-          await client.query("COMMIT");
-        } catch (auditErr) {
-          if (client) {
-            try {
-              await client.query("ROLLBACK");
-            } catch (rollbackErr) {
-            }
-          }
-          console.error("Failed to log decryption failure audit:", auditErr);
-        } finally {
-          if (client) client.release();
-        }
-      })();
-      return "[DECRYPTION_FAILURE]";
-    }
-  }
-  if (text.startsWith("LEXENC_")) {
-    try {
-      const rawBase64 = text.replace("LEXENC_", "");
-      return Buffer.from(rawBase64, "base64").toString("utf-8");
-    } catch (err) {
-      return "[LEGACY_DECRYPTION_ERROR]";
-    }
-  }
-  return text;
-}
-var encrypt = encryptData;
-var decrypt = decryptData;
+// backend/src/services/jobQueue.ts
+init_crypto();
 
 // backend/src/utils/retry.ts
 async function withRetry(fn, retries = 3, delay = 1e3) {
@@ -1772,17 +2362,29 @@ async function executeDocumentAnalysis(jobId, userId, payload) {
     return rows[0]?.role || "USER";
   });
   if (payload.type === "legal_ask") {
-    const { prompt, documents } = payload;
+    const { prompt, documents, jurisdiction, outputFormat } = payload;
     await updateJobProgress(jobId, userId, 30, "Searching knowledge base and synthesizing advice...");
-    console.log(`[JobRunner/legal_ask] Calling askLawyer via OpenRouter, prompt: "${String(prompt).substring(0, 80)}..."`);
-    const text = await jobRegistry.orchestrator.askLawyer(prompt, userId, documents);
-    return { text };
+    console.log(`[JobRunner/legal_ask] Calling askLawyer via OpenRouter`);
+    console.log(`  prompt: "${String(prompt).substring(0, 80)}..."`);
+    console.log(`  jurisdictions: ${JSON.stringify(jurisdiction || [])}`);
+    console.log(`  outputFormat: ${outputFormat || "Full IRAC"}`);
+    const result2 = await jobRegistry.orchestrator.askLawyer(
+      prompt,
+      userId,
+      documents,
+      jurisdiction,
+      outputFormat
+    );
+    return {
+      text: result2.text || result2,
+      sources: result2.sources || []
+    };
   }
   if (payload.prompt && payload.folderIds) {
-    const { folderIds, prompt, documentMode, answerStyle, history } = payload;
+    const { folderIds: folderIds2, prompt, documentMode, answerStyle, history } = payload;
     await updateJobProgress(jobId, userId, 30, "Analyzing documents in selected folders...");
     const result2 = await jobRegistry.orchestrator.interactAnalyze(
-      folderIds,
+      folderIds2,
       prompt,
       userId,
       documentMode,
@@ -1793,9 +2395,15 @@ async function executeDocumentAnalysis(jobId, userId, payload) {
     );
     return { analysis: result2, clauses: [] };
   }
-  const { documentId, content } = payload;
+  const { documentId, content, folderIds } = payload;
   await updateJobProgress(jobId, userId, 30, "AI agents performing legal audit...");
-  const result = await jobRegistry.orchestrator.runAnalysis(documentId, content, userId, void 0, userRole);
+  const result = await jobRegistry.orchestrator.runAnalysis(
+    documentId,
+    content,
+    userId,
+    Array.isArray(folderIds) ? folderIds : void 0,
+    userRole
+  );
   return result;
 }
 async function executeTemplateDrafting(jobId, userId, payload) {
@@ -1835,6 +2443,9 @@ IMPORTANT: Return only the rewritten text without any quotes or preamble.`;
         [versionId, docId2, encryptedContent2]
       );
     });
+    chunkAndIndexDocument(docId2, content, userId).catch(
+      (err) => console.warn(`[executeTemplateDrafting/refine] Chunk indexing failed for ${docId2}:`, err)
+    );
     return { data: content, file_id: docId2 };
   }
   const { mode, outputLevel, instructions, formFields, templateId, sourceText, playbookText } = payload;
@@ -1867,6 +2478,9 @@ IMPORTANT: Return only the rewritten text without any quotes or preamble.`;
       [versionId, docId, encryptedContent]
     );
   });
+  chunkAndIndexDocument(docId, result, userId).catch(
+    (err) => console.warn(`[executeTemplateDrafting] Chunk indexing failed for ${docId}:`, err)
+  );
   return { content: result, file_id: docId };
 }
 async function executePrivacyScanning(jobId, userId, payload) {
@@ -1964,8 +2578,8 @@ var buildDocxBuffer = async (title, contentType, content) => {
 };
 
 // backend/src/controllers/documents.ts
+init_crypto();
 import crypto4 from "crypto";
-import * as diff from "diff";
 import { fileTypeFromBuffer } from "file-type";
 var getDocuments = async (req, res) => {
   const userEmail = req.user.email.toLowerCase();
@@ -2051,6 +2665,11 @@ var createDocument = async (req, res) => {
         [versionId, id, encryptedContent]
       );
     });
+    if (content && content.trim().length > 0) {
+      chunkAndIndexDocument(id, content, userId).catch(
+        (err) => console.warn(`[createDocument] Chunk indexing failed for ${id}:`, err)
+      );
+    }
     res.status(201).json({ id, title, type });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2133,6 +2752,12 @@ var updateDocument = async (req, res) => {
         VALUES ($1, $2, $3)
       `, [userId, "document_update", JSON.stringify({ documentId: id, title })]);
     });
+    if (content && content.trim().length > 0) {
+      pool.query(
+        "DELETE FROM legal_document_chunks WHERE file_id = $1 AND user_id = $2",
+        [id, userId]
+      ).then(() => chunkAndIndexDocument(id, content, userId)).catch((err) => console.warn(`[updateDocument] Re-indexing failed for ${id}:`, err));
+    }
     res.json({ success: true });
   } catch (err) {
     res.status(err.message === "Document not found" ? 404 : 500).json({ error: err.message });
@@ -2236,6 +2861,21 @@ var signDocument = async (req, res) => {
     res.status(err.message === "Document not found" ? 404 : 500).json({ error: err.message });
   }
 };
+function parseRedlines(raw) {
+  if (Array.isArray(raw)) {
+    return raw;
+  }
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+    } catch {
+    }
+  }
+  return [];
+}
 var createRedline = async (req, res) => {
   const { id } = req.params;
   const { originalText, proposedText, comment } = req.body;
@@ -2245,10 +2885,16 @@ var createRedline = async (req, res) => {
     const newRedline = await withTransaction(userId, userRole, async (client) => {
       const { rows } = await client.query("SELECT redlines FROM files WHERE id = $1", [id]);
       if (rows.length === 0) throw new Error("Document not found");
-      const redlines = rows[0].redlines || [];
+      const redlines = parseRedlines(rows[0].redlines);
       const redline = { id: crypto4.randomUUID(), originalText, proposedText, comment, proposedByEmail: req.user.email, proposedAt: (/* @__PURE__ */ new Date()).toISOString(), status: "pending" };
       redlines.push(redline);
       await client.query("UPDATE files SET redlines = $1 WHERE id = $2", [JSON.stringify(redlines), id]);
+      console.log("[createRedline] persisted redline", {
+        documentId: id,
+        createdRedlineId: redline.id,
+        redlineIdsAfterSave: redlines.map((r) => r.id),
+        rawType: typeof rows[0].redlines
+      });
       return redline;
     });
     res.status(201).json(newRedline);
@@ -2261,58 +2907,69 @@ var acceptRedline = async (req, res) => {
   const userId = req.user.id;
   const userRole = req.user.role;
   try {
-    const rows = await withTransaction(userId, userRole, async (client) => {
-      const { rows: rows2 } = await client.query("SELECT * FROM files WHERE id = $1", [id]);
-      return rows2;
-    });
-    if (rows.length === 0) return res.status(404).json({ error: "Document not found" });
-    const doc = rows[0];
-    const redlines = doc.redlines || [];
-    const index = redlines.findIndex((r) => r.id === redlineId);
-    if (index === -1) return res.status(404).json({ error: "Redline not found" });
-    const currentContent = decrypt(doc.content);
-    const proposal = redlines[index];
-    const patch = diff.createPatch("content", proposal.originalText, proposal.proposedText);
-    const applied = diff.applyPatch(currentContent, patch);
-    let finalContent = currentContent;
-    if (applied === false) {
-      const normalizedOriginal = proposal.originalText.replace(/\s+/g, " ").trim().toLowerCase();
-      const normalizedDoc = currentContent.replace(/\s+/g, " ").toLowerCase();
-      if (normalizedDoc.includes(normalizedOriginal)) {
-        const occurrences = getAllIndexesOfNormalizedMatch(currentContent, proposal.originalText);
-        if (occurrences.length === 1) {
-          finalContent = currentContent.substring(0, occurrences[0].start) + proposal.proposedText + currentContent.substring(occurrences[0].end);
-        } else {
-          const fallbackReplaced = currentContent.replace(proposal.originalText, proposal.proposedText);
-          if (fallbackReplaced === currentContent && currentContent.indexOf(proposal.originalText) === -1) {
-            return res.status(400).json({ error: "Could not apply redline. Document structure has changed significantly." });
-          }
-          finalContent = fallbackReplaced;
-        }
-      } else {
-        return res.status(400).json({ error: "Could not apply redline. Clause not found in current document state." });
+    await withTransaction(userId, userRole, async (client) => {
+      const { rows } = await client.query("SELECT * FROM files WHERE id = $1", [id]);
+      if (rows.length === 0) throw new Error("DOCUMENT_NOT_FOUND");
+      const doc = rows[0];
+      const redlines = parseRedlines(doc.redlines);
+      console.log("[acceptRedline] lookup", {
+        documentId: id,
+        requestedRedlineId: redlineId,
+        storedRedlineIds: redlines.map((r) => r.id),
+        redlineCount: redlines.length
+      });
+      const index = redlines.findIndex((r) => r.id === redlineId);
+      if (index === -1) throw new Error("REDLINE_NOT_FOUND");
+      const proposal = redlines[index];
+      if (proposal.status === "accepted") {
+        throw new Error("ALREADY_ACCEPTED");
       }
-    } else {
-      finalContent = applied;
-    }
-    redlines[index].status = "accepted";
-    const encryptedFinal = encrypt(finalContent);
-    await withTransaction(req.user.id, req.user.role, async (client) => {
-      await client.query("UPDATE files SET content = $1, redlines = $2 WHERE id = $3", [encryptedFinal, JSON.stringify(redlines), id]);
+      const currentContent = doc.is_encrypted ? decrypt(doc.content) : doc.content;
+      const finalContent = applyClauseReplacement(
+        currentContent,
+        proposal.originalText,
+        proposal.proposedText
+      );
+      redlines[index].status = "accepted";
+      redlines[index].acceptedAt = (/* @__PURE__ */ new Date()).toISOString();
+      redlines[index].acceptedBy = req.user.email;
+      const encryptedFinal = encrypt(finalContent);
+      await client.query(
+        "UPDATE files SET content = $1, redlines = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3",
+        [encryptedFinal, JSON.stringify(redlines), id]
+      );
       const versionId = "ver_" + crypto4.randomUUID();
       await client.query(
         `INSERT INTO document_versions (id, file_id, content) VALUES ($1, $2, $3)`,
         [versionId, id, encryptedFinal]
       );
-      await client.query(`
-        INSERT INTO compliance_audit_logs (user_id, action_type, metadata)
-        VALUES ($1, $2, $3)
-      `, [req.user.id, "redline_accept", JSON.stringify({ documentId: id, redlineId })]);
+      await client.query(
+        `INSERT INTO compliance_audit_logs (user_id, action_type, metadata)
+         VALUES ($1, $2, $3)`,
+        [userId, "redline_accept", JSON.stringify({
+          documentId: id,
+          redlineId,
+          originalText: proposal.originalText.substring(0, 100),
+          proposedText: proposal.proposedText.substring(0, 100)
+        })]
+      );
     });
     res.json({ success: true });
   } catch (err) {
     console.error("Failed to accept redline:", err);
-    res.status(500).json({ error: err.message });
+    if (err.message === "DOCUMENT_NOT_FOUND") {
+      return res.status(404).json({ error: "Document not found" });
+    }
+    if (err.message === "REDLINE_NOT_FOUND") {
+      return res.status(404).json({ error: "Redline not found" });
+    }
+    if (err.message === "ALREADY_ACCEPTED") {
+      return res.status(400).json({ error: "This redline has already been accepted" });
+    }
+    if (err.message && err.message.startsWith("CLAUSE_")) {
+      return res.status(400).json({ error: err.message.replace("CLAUSE_", "").replace(/_/g, " ").toLowerCase().replace(/^\w/, (c) => c.toUpperCase()) });
+    }
+    res.status(500).json({ error: "Internal error processing redline acceptance" });
   }
 };
 var rejectRedline = async (req, res) => {
@@ -2320,41 +2977,83 @@ var rejectRedline = async (req, res) => {
   const userId = req.user.id;
   const userRole = req.user.role;
   try {
-    const rows = await withTransaction(userId, userRole, async (client) => {
-      const { rows: rows2 } = await client.query("SELECT redlines FROM files WHERE id = $1", [id]);
-      return rows2;
-    });
-    if (rows.length === 0) return res.status(404).json({ error: "Document not found" });
-    const redlines = rows[0].redlines || [];
-    const index = redlines.findIndex((r) => r.id === redlineId);
-    if (index === -1) return res.status(404).json({ error: "Redline not found" });
-    redlines[index].status = "rejected";
-    await withTransaction(req.user.id, req.user.role, async (client) => {
+    await withTransaction(userId, userRole, async (client) => {
+      const { rows } = await client.query("SELECT redlines FROM files WHERE id = $1", [id]);
+      if (rows.length === 0) throw new Error("DOCUMENT_NOT_FOUND");
+      const redlines = parseRedlines(rows[0].redlines);
+      const index = redlines.findIndex((r) => r.id === redlineId);
+      if (index === -1) throw new Error("REDLINE_NOT_FOUND");
+      redlines[index].status = "rejected";
+      redlines[index].rejectedAt = (/* @__PURE__ */ new Date()).toISOString();
+      redlines[index].rejectedBy = req.user.email;
       await client.query("UPDATE files SET redlines = $1 WHERE id = $2", [JSON.stringify(redlines), id]);
       await client.query(`
         INSERT INTO compliance_audit_logs (user_id, action_type, metadata)
         VALUES ($1, $2, $3)
-      `, [req.user.id, "redline_reject", JSON.stringify({ documentId: id, redlineId })]);
+      `, [userId, "redline_reject", JSON.stringify({ documentId: id, redlineId })]);
     });
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error("Failed to reject redline:", err);
+    if (err.message === "DOCUMENT_NOT_FOUND") {
+      return res.status(404).json({ error: "Document not found" });
+    }
+    if (err.message === "REDLINE_NOT_FOUND") {
+      return res.status(404).json({ error: "Redline not found" });
+    }
+    res.status(500).json({ error: "Internal error processing redline rejection" });
   }
 };
-function getAllIndexesOfNormalizedMatch(source, target) {
-  const results = [];
-  const targetNorm = target.replace(/\s+/g, " ").trim().toLowerCase();
-  for (let i = 0; i < source.length; i++) {
-    for (let j = i + target.length * 0.8; j < i + target.length * 1.2; j++) {
-      const sub = source.substring(i, j);
-      if (sub.replace(/\s+/g, " ").trim().toLowerCase() === targetNorm) {
-        results.push({ start: i, end: j });
-        i = j;
-        break;
+function applyClauseReplacement(documentContent, originalText, proposedText) {
+  const firstExact = documentContent.indexOf(originalText);
+  if (firstExact !== -1) {
+    const secondExact = documentContent.indexOf(originalText, firstExact + 1);
+    if (secondExact !== -1) {
+      throw new Error(
+        "CLAUSE_Clause matched multiple locations in the current document. Redline cannot be safely applied."
+      );
+    }
+    return documentContent.substring(0, firstExact) + proposedText + documentContent.substring(firstExact + originalText.length);
+  }
+  const normalizedTarget = originalText.replace(/\s+/g, " ").trim();
+  if (normalizedTarget.length === 0) {
+    throw new Error("CLAUSE_Could not locate the original clause in the current document state.");
+  }
+  const normChars = [];
+  const normToOrig = [];
+  let prevWasSpace = false;
+  for (let i = 0; i < documentContent.length; i++) {
+    const ch = documentContent[i];
+    if (/\s/.test(ch)) {
+      if (!prevWasSpace) {
+        normChars.push(" ");
+        normToOrig.push(i);
+        prevWasSpace = true;
       }
+    } else {
+      normChars.push(ch);
+      normToOrig.push(i);
+      prevWasSpace = false;
     }
   }
-  return results;
+  const normalizedDoc = normChars.join("");
+  const lowerDoc = normalizedDoc.toLowerCase();
+  const lowerTarget = normalizedTarget.toLowerCase();
+  const firstNorm = lowerDoc.indexOf(lowerTarget);
+  if (firstNorm === -1) {
+    throw new Error(
+      "CLAUSE_Could not locate the original clause in the current document state."
+    );
+  }
+  const secondNorm = lowerDoc.indexOf(lowerTarget, firstNorm + 1);
+  if (secondNorm !== -1) {
+    throw new Error(
+      "CLAUSE_Clause matched multiple locations in the current document. Redline cannot be safely applied."
+    );
+  }
+  const origStart = normToOrig[firstNorm];
+  const origEnd = normToOrig[firstNorm + normalizedTarget.length - 1] + 1;
+  return documentContent.substring(0, origStart) + proposedText + documentContent.substring(origEnd);
 }
 var exportDocument = async (req, res) => {
   const { title, format, contentType, content, documentId } = req.body;
@@ -2884,6 +3583,7 @@ var reports_default = router12;
 
 // backend/src/routes/settings.ts
 import { Router as Router13 } from "express";
+init_database();
 var router13 = Router13();
 router13.get("/:key", authenticateToken, async (req, res) => {
   const { key } = req.params;
@@ -2935,6 +3635,7 @@ router14.use("/settings", settings_default);
 var routes_default = router14;
 
 // backend/src/middleware/cors.ts
+init_config();
 import cors from "cors";
 var corsOrigins = new Set(
   [
@@ -3023,6 +3724,7 @@ var errorHandler = (err, req, res, next) => {
 };
 
 // backend/src/middleware/queryLogger.ts
+init_database();
 var isPatched = false;
 var initQueryLogger = () => {
   if (isPatched) return;

@@ -276,13 +276,27 @@ async function executeDocumentAnalysis(jobId: string, userId: string, payload: a
   });
 
   if (payload.type === "legal_ask") {
-    const { prompt, documents } = payload;
+    const { prompt, documents, jurisdiction, outputFormat } = payload;
     await updateJobProgress(jobId, userId, 30, "Searching knowledge base and synthesizing advice...");
 
-    console.log(`[JobRunner/legal_ask] Calling askLawyer via OpenRouter, prompt: "${String(prompt).substring(0, 80)}..."`);
-    const text = await jobRegistry.orchestrator.askLawyer(prompt, userId, documents);
-    // AskAILawyer.tsx reads: job.result.text
-    return { text };
+    console.log(`[JobRunner/legal_ask] Calling askLawyer via OpenRouter`);
+    console.log(`  prompt: "${String(prompt).substring(0, 80)}..."`);
+    console.log(`  jurisdictions: ${JSON.stringify(jurisdiction || [])}`);
+    console.log(`  outputFormat: ${outputFormat || "Full IRAC"}`);
+
+    const result = await jobRegistry.orchestrator.askLawyer(
+      prompt, 
+      userId, 
+      documents,
+      jurisdiction,
+      outputFormat
+    );
+
+    // Return both text and sources if available
+    return { 
+      text: result.text || result,
+      sources: result.sources || []
+    };
   }
 
   if (payload.prompt && payload.folderIds) {
@@ -295,11 +309,17 @@ async function executeDocumentAnalysis(jobId: string, userId: string, payload: a
      return { analysis: result, clauses: [] };
   }
 
-  const { documentId, content } = payload;
+  const { documentId, content, folderIds } = payload;
 
   await updateJobProgress(jobId, userId, 30, "AI agents performing legal audit...");
 
-  const result = await jobRegistry.orchestrator.runAnalysis(documentId, content, userId, undefined, userRole);
+  const result = await jobRegistry.orchestrator.runAnalysis(
+    documentId,
+    content,
+    userId,
+    Array.isArray(folderIds) ? folderIds : undefined,
+    userRole
+  );
   return result;
 }
 
@@ -343,6 +363,11 @@ async function executeTemplateDrafting(jobId: string, userId: string, payload: a
       );
     });
 
+    // Index refined content for RAG retrieval (fire-and-forget)
+    chunkAndIndexDocument(docId, content, userId).catch((err) =>
+      console.warn(`[executeTemplateDrafting/refine] Chunk indexing failed for ${docId}:`, err)
+    );
+
     return { data: content, file_id: docId };
   }
 
@@ -383,6 +408,11 @@ async function executeTemplateDrafting(jobId: string, userId: string, payload: a
       [versionId, docId, encryptedContent]
     );
   });
+
+  // Index drafted content for RAG retrieval (fire-and-forget)
+  chunkAndIndexDocument(docId, result, userId).catch((err) =>
+    console.warn(`[executeTemplateDrafting] Chunk indexing failed for ${docId}:`, err)
+  );
 
   return { content: result, file_id: docId };
 }

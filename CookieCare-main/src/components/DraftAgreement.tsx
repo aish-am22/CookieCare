@@ -1050,13 +1050,13 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
                 </div>
               )}
 
-              <button
+              {/* <button
                 onClick={() => setShowCreateModal(true)}
                 className="h-9 px-3.5 rounded-lg bg-[#0F172A] text-white hover:bg-slate-800 text-xs font-bold flex items-center space-x-1.5 transition cursor-pointer font-mono"
               >
                 <Plus className="w-4 h-4" />
                 <span>+ New Draft</span>
-              </button>
+              </button> */}
 
               <button className="flex items-center justify-center w-9 h-9 bg-white border border-gray-200 rounded-lg text-gray-400 hover:bg-gray-50 shadow-xs transition">
                 <HelpCircle className="w-4.5 h-4.5" />
@@ -1695,14 +1695,14 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
                   </div>
                 )}
 
-                <button
+                {/* <button
                   onClick={() => setShowCreateModal(true)}
                   className="p-1.5 px-3 border border-gray-250 hover:bg-slate-50 rounded-lg text-slate-750 hover:text-black transition shadow-xs flex items-center space-x-1.5 shrink-0 bg-white font-mono text-xs font-semibold"
                   title="New Draft Structure"
                 >
                   <Plus className="w-3.5 h-3.5 text-slate-500" />
                   <span className="text-[10px] font-mono font-bold uppercase hidden md:inline">Draft</span>
-                </button>
+                </button> */}
 
                 <div className="min-w-0 hidden lg:block">
                   <h2 className="text-xs font-bold text-gray-900 truncate">

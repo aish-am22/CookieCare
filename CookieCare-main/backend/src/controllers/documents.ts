@@ -4,8 +4,8 @@ import { addJobToQueue } from "../services/jobQueue.js";
 import { withTransaction } from "../utils/dbUtils.js";
 import { buildPdfBuffer, buildDocxBuffer } from "../services/exportService.js";
 import { encrypt, decrypt } from "../utils/crypto.js";
+import { chunkAndIndexDocument } from "../RAG/ragService.js";
 import crypto from "crypto";
-import * as diff from "diff";
 import { fileTypeFromBuffer } from "file-type";
 
 export const getDocuments = async (req: Request, res: Response) => {
@@ -103,6 +103,14 @@ export const createDocument = async (req: Request, res: Response) => {
         [versionId, id, encryptedContent]
       );
     });
+
+    // Index the document content for RAG retrieval (fire-and-forget, non-blocking)
+    if (content && content.trim().length > 0) {
+      chunkAndIndexDocument(id, content, userId).catch((err) =>
+        console.warn(`[createDocument] Chunk indexing failed for ${id}:`, err)
+      );
+    }
+
     res.status(201).json({ id, title, type });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -201,6 +209,16 @@ export const updateDocument = async (req: Request, res: Response) => {
         VALUES ($1, $2, $3)
       `, [userId, 'document_update', JSON.stringify({ documentId: id, title })]);
     });
+
+    // Re-index updated content for RAG retrieval (fire-and-forget, non-blocking)
+    if (content && content.trim().length > 0) {
+      // Delete old chunks then re-insert via chunkAndIndexDocument
+      pool.query(
+        "DELETE FROM legal_document_chunks WHERE file_id = $1 AND user_id = $2",
+        [id, userId]
+      ).then(() => chunkAndIndexDocument(id, content, userId))
+        .catch((err) => console.warn(`[updateDocument] Re-indexing failed for ${id}:`, err));
+    }
 
     res.json({ success: true });
   } catch (err: any) {
@@ -325,6 +343,34 @@ export const signDocument = async (req: Request, res: Response) => {
   }
 };
 
+/**
+ * Safely parses the redlines field from the database.
+ * 
+ * Handles various states:
+ * - Already-parsed array (from JSONB column)
+ * - Stringified JSON array
+ * - null / undefined
+ * - Malformed data
+ * 
+ * Returns an empty array if parsing fails or data is invalid.
+ */
+function parseRedlines(raw: unknown): any[] {
+  if (Array.isArray(raw)) {
+    return raw;
+  }
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+    } catch {
+      // Fall through to return []
+    }
+  }
+  return [];
+}
+
 export const createRedline = async (req: Request, res: Response) => {
   const { id } = req.params;
   const { originalText, proposedText, comment } = req.body;
@@ -335,10 +381,16 @@ export const createRedline = async (req: Request, res: Response) => {
     const newRedline = await withTransaction(userId, userRole, async (client) => {
       const { rows } = await client.query("SELECT redlines FROM files WHERE id = $1", [id]);
       if (rows.length === 0) throw new Error("Document not found");
-      const redlines = rows[0].redlines || [];
+      const redlines = parseRedlines(rows[0].redlines);
       const redline = { id: crypto.randomUUID(), originalText, proposedText, comment, proposedByEmail: req.user!.email, proposedAt: new Date().toISOString(), status: "pending" };
       redlines.push(redline);
       await client.query("UPDATE files SET redlines = $1 WHERE id = $2", [JSON.stringify(redlines), id]);
+      console.log("[createRedline] persisted redline", {
+        documentId: id,
+        createdRedlineId: redline.id,
+        redlineIdsAfterSave: redlines.map((r: any) => r.id),
+        rawType: typeof rows[0].redlines,
+      });
       return redline;
     });
     res.status(201).json(newRedline);
@@ -353,69 +405,91 @@ export const acceptRedline = async (req: Request, res: Response) => {
   const userRole = req.user!.role;
 
   try {
-    const rows = await withTransaction(userId, userRole, async (client) => {
+    await withTransaction(userId, userRole, async (client) => {
+      // Fetch document and redlines in a single transaction
       const { rows } = await client.query("SELECT * FROM files WHERE id = $1", [id]);
-      return rows;
-    });
+      if (rows.length === 0) throw new Error("DOCUMENT_NOT_FOUND");
 
-    if (rows.length === 0) return res.status(404).json({ error: "Document not found" });
+      const doc = rows[0];
+      const redlines = parseRedlines(doc.redlines);
 
-    const doc = rows[0];
-    const redlines = doc.redlines || [];
-    const index = redlines.findIndex((r: any) => r.id === redlineId);
-    if (index === -1) return res.status(404).json({ error: "Redline not found" });
+      console.log("[acceptRedline] lookup", {
+        documentId: id,
+        requestedRedlineId: redlineId,
+        storedRedlineIds: redlines.map((r: any) => r.id),
+        redlineCount: redlines.length,
+      });
 
-    const currentContent = decrypt(doc.content);
-    const proposal = redlines[index];
+      const index = redlines.findIndex((r: any) => r.id === redlineId);
+      if (index === -1) throw new Error("REDLINE_NOT_FOUND");
 
-    const patch = diff.createPatch("content", proposal.originalText, proposal.proposedText);
-    const applied = diff.applyPatch(currentContent, patch);
-
-    let finalContent = currentContent;
-    if (applied === false) {
-      const normalizedOriginal = proposal.originalText.replace(/\s+/g, ' ').trim().toLowerCase();
-      const normalizedDoc = currentContent.replace(/\s+/g, ' ').toLowerCase();
-
-      if (normalizedDoc.includes(normalizedOriginal)) {
-        const occurrences = getAllIndexesOfNormalizedMatch(currentContent, proposal.originalText);
-        if (occurrences.length === 1) {
-          finalContent = currentContent.substring(0, occurrences[0].start) + proposal.proposedText + currentContent.substring(occurrences[0].end);
-        } else {
-          const fallbackReplaced = currentContent.replace(proposal.originalText, proposal.proposedText);
-          if (fallbackReplaced === currentContent && currentContent.indexOf(proposal.originalText) === -1) {
-            return res.status(400).json({ error: "Could not apply redline. Document structure has changed significantly." });
-          }
-          finalContent = fallbackReplaced;
-        }
-      } else {
-        return res.status(400).json({ error: "Could not apply redline. Clause not found in current document state." });
+      const proposal = redlines[index];
+      if (proposal.status === "accepted") {
+        throw new Error("ALREADY_ACCEPTED");
       }
-    } else {
-      finalContent = applied;
-    }
 
-    redlines[index].status = "accepted";
-    const encryptedFinal = encrypt(finalContent);
+      // Decrypt current content
+      const currentContent = doc.is_encrypted ? decrypt(doc.content) : doc.content;
 
-    await withTransaction(req.user!.id, req.user!.role, async (client) => {
-      await client.query("UPDATE files SET content = $1, redlines = $2 WHERE id = $3", [encryptedFinal, JSON.stringify(redlines), id]);
+      // Apply the clause replacement safely
+      const finalContent = applyClauseReplacement(
+        currentContent,
+        proposal.originalText,
+        proposal.proposedText
+      );
 
+      // Mark redline as accepted
+      redlines[index].status = "accepted";
+      redlines[index].acceptedAt = new Date().toISOString();
+      redlines[index].acceptedBy = req.user!.email;
+
+      // Encrypt updated content
+      const encryptedFinal = encrypt(finalContent);
+
+      // Update document with new content and redline status
+      await client.query(
+        "UPDATE files SET content = $1, redlines = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3",
+        [encryptedFinal, JSON.stringify(redlines), id]
+      );
+
+      // Create new version
       const versionId = "ver_" + crypto.randomUUID();
       await client.query(
         `INSERT INTO document_versions (id, file_id, content) VALUES ($1, $2, $3)`,
         [versionId, id, encryptedFinal]
       );
 
-      await client.query(`
-        INSERT INTO compliance_audit_logs (user_id, action_type, metadata)
-        VALUES ($1, $2, $3)
-      `, [req.user!.id, 'redline_accept', JSON.stringify({ documentId: id, redlineId })]);
+      // Insert audit log
+      await client.query(
+        `INSERT INTO compliance_audit_logs (user_id, action_type, metadata)
+         VALUES ($1, $2, $3)`,
+        [userId, 'redline_accept', JSON.stringify({ 
+          documentId: id, 
+          redlineId,
+          originalText: proposal.originalText.substring(0, 100),
+          proposedText: proposal.proposedText.substring(0, 100)
+        })]
+      );
     });
 
     res.json({ success: true });
   } catch (err: any) {
     console.error("Failed to accept redline:", err);
-    res.status(500).json({ error: err.message });
+    
+    if (err.message === "DOCUMENT_NOT_FOUND") {
+      return res.status(404).json({ error: "Document not found" });
+    }
+    if (err.message === "REDLINE_NOT_FOUND") {
+      return res.status(404).json({ error: "Redline not found" });
+    }
+    if (err.message === "ALREADY_ACCEPTED") {
+      return res.status(400).json({ error: "This redline has already been accepted" });
+    }
+    if (err.message && err.message.startsWith("CLAUSE_")) {
+      return res.status(400).json({ error: err.message.replace("CLAUSE_", "").replace(/_/g, " ").toLowerCase().replace(/^\w/, c => c.toUpperCase()) });
+    }
+    
+    res.status(500).json({ error: "Internal error processing redline acceptance" });
   }
 };
 
@@ -425,44 +499,129 @@ export const rejectRedline = async (req: Request, res: Response) => {
   const userRole = req.user!.role;
 
   try {
-    const rows = await withTransaction(userId, userRole, async (client) => {
+    await withTransaction(userId, userRole, async (client) => {
       const { rows } = await client.query("SELECT redlines FROM files WHERE id = $1", [id]);
-      return rows;
-    });
+      if (rows.length === 0) throw new Error("DOCUMENT_NOT_FOUND");
 
-    if (rows.length === 0) return res.status(404).json({ error: "Document not found" });
-    const redlines = rows[0].redlines || [];
-    const index = redlines.findIndex((r: any) => r.id === redlineId);
-    if (index === -1) return res.status(404).json({ error: "Redline not found" });
-    redlines[index].status = "rejected";
-    await withTransaction(req.user!.id, req.user!.role, async (client) => {
+      const redlines = parseRedlines(rows[0].redlines);
+      const index = redlines.findIndex((r: any) => r.id === redlineId);
+      if (index === -1) throw new Error("REDLINE_NOT_FOUND");
+
+      redlines[index].status = "rejected";
+      redlines[index].rejectedAt = new Date().toISOString();
+      redlines[index].rejectedBy = req.user!.email;
+
       await client.query("UPDATE files SET redlines = $1 WHERE id = $2", [JSON.stringify(redlines), id]);
 
       await client.query(`
         INSERT INTO compliance_audit_logs (user_id, action_type, metadata)
         VALUES ($1, $2, $3)
-      `, [req.user!.id, 'redline_reject', JSON.stringify({ documentId: id, redlineId })]);
+      `, [userId, 'redline_reject', JSON.stringify({ documentId: id, redlineId })]);
     });
 
     res.json({ success: true });
-  } catch (err: any) { res.status(500).json({ error: err.message }); }
+  } catch (err: any) {
+    console.error("Failed to reject redline:", err);
+
+    if (err.message === "DOCUMENT_NOT_FOUND") {
+      return res.status(404).json({ error: "Document not found" });
+    }
+    if (err.message === "REDLINE_NOT_FOUND") {
+      return res.status(404).json({ error: "Redline not found" });
+    }
+
+    res.status(500).json({ error: "Internal error processing redline rejection" });
+  }
 };
 
-function getAllIndexesOfNormalizedMatch(source: string, target: string) {
-  const results = [];
-  const targetNorm = target.replace(/\s+/g, ' ').trim().toLowerCase();
+/**
+ * Safely applies a clause replacement to document content.
+ *
+ * Strategy:
+ *   1. Exact match — if originalText appears exactly once, replace it.
+ *   2. Normalized whitespace match — collapse runs of whitespace for comparison,
+ *      find the one matching span in the original document, replace that span.
+ *   3. Fail-safe — throw a typed error if the clause is not found or matches
+ *      multiple locations, so the caller can return a clean 400.
+ *
+ * Throws with a "CLAUSE_*" prefix so acceptRedline() can detect and surface
+ * these as 400 errors rather than 500s.
+ */
+function applyClauseReplacement(
+  documentContent: string,
+  originalText: string,
+  proposedText: string
+): string {
+  // ── Step 1: Exact match ──────────────────────────────────────────────────
+  const firstExact = documentContent.indexOf(originalText);
+  if (firstExact !== -1) {
+    const secondExact = documentContent.indexOf(originalText, firstExact + 1);
+    if (secondExact !== -1) {
+      throw new Error(
+        "CLAUSE_Clause matched multiple locations in the current document. Redline cannot be safely applied."
+      );
+    }
+    return (
+      documentContent.substring(0, firstExact) +
+      proposedText +
+      documentContent.substring(firstExact + originalText.length)
+    );
+  }
 
-  for (let i = 0; i < source.length; i++) {
-    for (let j = i + target.length * 0.8; j < i + target.length * 1.2; j++) {
-      const sub = source.substring(i, j);
-      if (sub.replace(/\s+/g, ' ').trim().toLowerCase() === targetNorm) {
-        results.push({ start: i, end: j });
-        i = j;
-        break;
+  // ── Step 2: Normalized whitespace match ──────────────────────────────────
+  // Collapse runs of whitespace in the document while building a char-offset
+  // map back to the original, then search in the collapsed space.
+  const normalizedTarget = originalText.replace(/\s+/g, " ").trim();
+  if (normalizedTarget.length === 0) {
+    throw new Error("CLAUSE_Could not locate the original clause in the current document state.");
+  }
+
+  const normChars: string[] = [];   // normalized document chars
+  const normToOrig: number[] = [];  // normChars[i] → documentContent[normToOrig[i]]
+
+  let prevWasSpace = false;
+  for (let i = 0; i < documentContent.length; i++) {
+    const ch = documentContent[i];
+    if (/\s/.test(ch)) {
+      if (!prevWasSpace) {
+        normChars.push(" ");
+        normToOrig.push(i);
+        prevWasSpace = true;
       }
+    } else {
+      normChars.push(ch);
+      normToOrig.push(i);
+      prevWasSpace = false;
     }
   }
-  return results;
+
+  const normalizedDoc = normChars.join("");
+  const lowerDoc = normalizedDoc.toLowerCase();
+  const lowerTarget = normalizedTarget.toLowerCase();
+
+  const firstNorm = lowerDoc.indexOf(lowerTarget);
+  if (firstNorm === -1) {
+    throw new Error(
+      "CLAUSE_Could not locate the original clause in the current document state."
+    );
+  }
+
+  const secondNorm = lowerDoc.indexOf(lowerTarget, firstNorm + 1);
+  if (secondNorm !== -1) {
+    throw new Error(
+      "CLAUSE_Clause matched multiple locations in the current document. Redline cannot be safely applied."
+    );
+  }
+
+  // Map normalized match positions directly through normToOrig — no offset adjustment needed
+  const origStart = normToOrig[firstNorm];
+  const origEnd   = normToOrig[firstNorm + normalizedTarget.length - 1] + 1; // exclusive
+
+  return (
+    documentContent.substring(0, origStart) +
+    proposedText +
+    documentContent.substring(origEnd)
+  );
 }
 
 export const exportDocument = async (req: Request, res: Response) => {
