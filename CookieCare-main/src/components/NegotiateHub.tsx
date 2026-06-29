@@ -20,6 +20,7 @@ import {
   FileText
 } from "lucide-react";
 import { LegalDocument, RedlineProposal } from "../types";
+import AiProgressOverlay from "./AiProgressOverlay";
 
 interface NegotiateHubProps {
   documents: LegalDocument[];
@@ -52,6 +53,7 @@ export default function NegotiateHub({
   const [agentMarkups, setAgentMarkups] = useState<AgentMarkup[]>([]);
   const [selectedMarkup, setSelectedMarkup] = useState<AgentMarkup | null>(null);
   const [evaluating, setEvaluating] = useState(false);
+  const [evaluationError, setEvaluationError] = useState("");
   const [errorText, setErrorText] = useState("");
 
   // Accept in-flight guard to prevent duplicate accept requests
@@ -140,6 +142,7 @@ export default function NegotiateHub({
     setEvaluatingDocId(docId);
     setEvaluating(true);
     setErrorText("");
+    setEvaluationError("");
     try {
       const res = await fetch(apiUrl("/api/negotiate/evaluate"), {
         method: "POST",
@@ -169,6 +172,7 @@ export default function NegotiateHub({
     } catch (err: any) {
       if (requestId === evalRequestIdRef.current) {
         setErrorText(err.message || "Failed to trigger multi-agent pipeline.");
+        setEvaluationError(err.message || "Failed to trigger multi-agent pipeline.");
       }
     } finally {
       if (requestId === evalRequestIdRef.current) {
@@ -571,17 +575,19 @@ export default function NegotiateHub({
               </div>
 
               {/* INTERACTIVE DOCUMENT PARAGRAPH RENDERER WITH INLINE DIFFS */}
-              <div className="mt-4">
-                {evaluating ? (
-                  <div className="h-[400px] flex flex-col items-center justify-center space-y-4 border border-dashed border-zinc-205 rounded-xl">
-                    <RefreshCw className="w-8 h-8 text-black animate-spin" />
-                    <p className="text-xs text-zinc-500 font-mono animate-pulse">
-                      Parsing document structure strictly based on clause boundaries...
-                    </p>
-                  </div>
-                ) : (
-                  renderInteractiveTextPane(activeDoc.content)
-                )}
+              <div className="mt-4 relative">
+                <AiProgressOverlay
+                  visible={evaluating || !!evaluationError}
+                  message={evaluating ? "Parsing contract structure and detecting risk clauses..." : ""}
+                  error={evaluationError}
+                  label="Evaluating contract..."
+                  onRetry={evaluationError ? () => {
+                    setEvaluationError("");
+                    if (activeDoc) runMultiAgentEvaluation(activeDoc.id, activeDoc.content, { title: activeDoc.title, type: activeDoc.type });
+                  } : undefined}
+                  onDismiss={evaluationError ? () => setEvaluationError("") : undefined}
+                />
+                {!evaluating && !evaluationError && renderInteractiveTextPane(activeDoc.content)}
               </div>
 
               <div className="mt-4 flex items-center justify-between text-[11px] font-mono text-gray-400">

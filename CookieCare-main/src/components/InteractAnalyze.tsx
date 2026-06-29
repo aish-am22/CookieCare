@@ -37,6 +37,7 @@ import {
 } from "lucide-react";
 import { apiUrl } from "../config";
 import { LegalDocument } from "../types";
+import AiProgressOverlay from "./AiProgressOverlay";
 
 interface InteractAnalyzeProps {
   documents: LegalDocument[];
@@ -81,6 +82,8 @@ export default function InteractAnalyze({
   const [documentMode, setDocumentMode] = useState<"unified" | "individual">("unified");
   const [answerStyle, setAnswerStyle] = useState<"narrative" | "tabular">("narrative");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisProgress, setAnalysisProgress] = useState("");
+  const [analysisError, setAnalysisError] = useState("");
   const [showCopyToast, setShowCopyToast] = useState(false);
 
   // --- SELECTION UTILITY PRESSETS ---
@@ -132,7 +135,24 @@ export default function InteractAnalyze({
           selected: false
         }));
 
-        const rootFilesCount = docsData.filter((d: any) => !d.folder_id).length;
+        // Decode the JWT to get the current user's email so we only count
+        // documents this user actually owns. Without this, docs shared with
+        // this user by others (which have folder_id = null inside the owner's
+        // vault) would inflate rootFilesCount and show a phantom
+        // "Unassigned Vault Files" folder even after the user's own files
+        // are deleted.
+        let currentUserEmail = "";
+        try {
+          const payload = JSON.parse(atob(authToken.split(".")[1]));
+          currentUserEmail = (payload.email || "").toLowerCase();
+        } catch {
+          // If JWT decode fails, fall back to showing all unassigned docs
+        }
+
+        const rootFilesCount = docsData.filter((d: any) =>
+          !d.folder_id &&
+          (!currentUserEmail || (d.creator_email || "").toLowerCase() === currentUserEmail)
+        ).length;
         if (rootFilesCount > 0) {
           formattedFolders.push({
             id: "root",
@@ -330,9 +350,12 @@ export default function InteractAnalyze({
     const firstSelected = activeSelectedFolders[0].name;
     setActiveReportDocName(firstSelected);
     setIsAnalyzing(true);
+    setAnalysisProgress("Preparing analysis request...");
+    setAnalysisError("");
 
     let waitingForJob = false;
     try {
+      setAnalysisProgress("Sending request to AI...");
       const response = await fetch(apiUrl("/api/analyze/interact"), {
         method: "POST",
         headers: {
@@ -353,10 +376,15 @@ export default function InteractAnalyze({
 
       if (response.status === 202 && data.job_id) {
         waitingForJob = true;
+        setAnalysisProgress("Uploading documents to AI engine...");
         const eventSource = new EventSource(apiUrl(`/api/jobs/sse?token=${authToken}`));
         eventSource.onmessage = (event) => {
           const payload = JSON.parse(event.data);
           if (payload.event === "job_update" && payload.job.id === data.job_id) {
+            // Show real-time message from the backend job
+            if (payload.job.message) {
+              setAnalysisProgress(payload.job.message);
+            }
             if (payload.job.status === "completed") {
               const result = typeof payload.job.result === "string"
                 ? { analysis: payload.job.result, clauses: [] }
@@ -370,26 +398,25 @@ export default function InteractAnalyze({
               if (result.clauses) setReportClauses(result.clauses);
               setViewMode("report");
               setIsAnalyzing(false);
+              setAnalysisProgress("");
               eventSource.close();
             } else if (payload.job.status === "failed") {
               eventSource.close();
-              setChatMessages([{ sender: "gemini", text: payload.job.error || "Analysis failed." }]);
-              setViewMode("report");
+              setAnalysisError(payload.job.error || "Analysis failed. Please try again.");
               setIsAnalyzing(false);
             }
           }
         };
         eventSource.onerror = () => {
           eventSource.close();
-          setChatMessages([{ sender: "gemini", text: "Analysis connection interrupted. Please try again." }]);
-          setViewMode("report");
+          setAnalysisError("Connection to AI engine was interrupted. Please retry.");
           setIsAnalyzing(false);
         };
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Analysis failed", err);
-      setChatMessages([{ sender: "gemini", text: "Failed to perform analysis. Please check your connection." }]);
-      setViewMode("report");
+      setAnalysisError(err.message || "Failed to perform analysis. Please check your connection.");
+      setIsAnalyzing(false);
     } finally {
       if (!waitingForJob) setIsAnalyzing(false);
     }
@@ -604,31 +631,15 @@ export default function InteractAnalyze({
         }
       `}</style>
 
-      {isAnalyzing && (
-        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-gray-50/95 p-6 select-none">
-          <div className="max-w-md w-full bg-white border border-gray-200/90 p-8 text-center space-y-6 relative overflow-hidden shadow-sm">
-            <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-emerald-400 via-teal-400 to-indigo-500 animate-pulse" />
-            <div className="flex justify-center">
-              <div className="relative">
-                <div className="w-16 h-16 rounded-full border-4 border-gray-100 border-t-black animate-spin" />
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <Sparkles className="w-5 h-5 text-black animate-pulse" />
-                </div>
-              </div>
-            </div>
-            <div className="space-y-2">
-              <span className="text-[10px] font-mono tracking-widest text-gray-400 font-extrabold uppercase">COGNITIVE COMPLIANCE ENGINE</span>
-              <h3 className="text-sm font-mono font-black text-gray-950 uppercase">Analyzing {activeReportDocName}...</h3>
-              <p className="text-xs text-gray-500 max-w-xs mx-auto leading-relaxed">
-                Deep-scanning document metadata, cross-referencing regional statutes, and executing multi-agent audit protocols in real-time.
-              </p>
-            </div>
-            <div className="pt-4 border-t border-gray-150 flex items-center justify-center space-x-3 text-[10px] font-mono text-gray-400">
-              <Loader2 className="w-3.5 h-3.5 animate-spin text-black" />
-              <span>EXAMINING METADATA STACKS • 100% SECURE</span>
-            </div>
-          </div>
-        </div>
+      {(isAnalyzing || analysisError) && (
+        <AiProgressOverlay
+          visible={isAnalyzing || !!analysisError}
+          message={analysisProgress}
+          error={analysisError}
+          label={`Analyzing ${activeReportDocName || "document"}...`}
+          onRetry={analysisError ? () => { setAnalysisError(""); handleStartAnalysis(); } : undefined}
+          onDismiss={analysisError ? () => setAnalysisError("") : undefined}
+        />
       )}
       
       {viewMode === "form" ? (

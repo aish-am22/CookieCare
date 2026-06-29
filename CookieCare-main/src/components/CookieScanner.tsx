@@ -19,6 +19,7 @@ import {
   FileCheck
 } from "lucide-react";
 import { CookieScanResult, CookieDetected, PrivacyComplianceGap } from "../types";
+import AiProgressOverlay from "./AiProgressOverlay";
 
 interface CookieScannerProps {
   authToken: string;
@@ -30,6 +31,7 @@ export default function CookieScanner({ authToken }: CookieScannerProps) {
   const [scanning, setScanning] = useState(false);
   const [result, setResult] = useState<CookieScanResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [scanProgress, setScanProgress] = useState("");
   const [shareEmail, setShareEmail] = useState("");
   const [sharing, setSharing] = useState(false);
   const [shareMessage, setShareMessage] = useState<string | null>(null);
@@ -67,6 +69,7 @@ export default function CookieScanner({ authToken }: CookieScannerProps) {
     setScanning(true);
     setError(null);
     setResult(null);
+    setScanProgress("Preparing privacy scan request...");
     setShareMessage(null);
 
     // Format URL safely
@@ -93,11 +96,13 @@ export default function CookieScanner({ authToken }: CookieScannerProps) {
       if (res.status === 202 && data.job_id) {
         const jobId: string = data.job_id;
         resolvedRef.current = false;
+        setScanProgress("Scanning website for trackers and consent elements...");
 
         const finish = (jobResult: any) => {
           if (resolvedRef.current) return;
           resolvedRef.current = true;
           setResult(jobResult);
+          setScanProgress("");
           setScanning(false);
           cleanupListeners();
         };
@@ -106,6 +111,7 @@ export default function CookieScanner({ authToken }: CookieScannerProps) {
           if (resolvedRef.current) return;
           resolvedRef.current = true;
           setError(msg || "Scanner failed unexpectedly.");
+          setScanProgress("");
           setScanning(false);
           cleanupListeners();
         };
@@ -118,6 +124,7 @@ export default function CookieScanner({ authToken }: CookieScannerProps) {
           try {
             const payload = JSON.parse(event.data);
             if (payload.event === "job_update" && payload.job.id === jobId) {
+              if (payload.job.message) setScanProgress(payload.job.message);
               if (payload.job.status === "completed") finish(payload.job.result);
               else if (payload.job.status === "failed") fail(payload.job.error);
             }
@@ -271,6 +278,18 @@ Report secured and validated by Lexify FIPS Sandbox services.`;
 
   return (
     <div className="flex-1 overflow-y-auto p-10 font-sans grid-bg min-h-screen">
+      
+      {/* SSE scan progress overlay */}
+      {(scanning || !!error) && (
+        <AiProgressOverlay
+          visible={scanning || !!error}
+          message={scanProgress}
+          error={error || ""}
+          label="Scanning website..."
+          onRetry={error ? () => { setError(null); } : undefined}
+          onDismiss={error ? () => setError(null) : undefined}
+        />
+      )}
       
       {/* BRAND & HEADER SECTION */}
       <div className="mb-10 flex flex-col md:flex-row md:items-center justify-between gap-4">

@@ -25,6 +25,7 @@ import {
   ArrowRight
 } from "lucide-react";
 import { LegalDocument } from "../types";
+import AiProgressOverlay from "./AiProgressOverlay";
 
 interface Message {
   role: "user" | "assistant";
@@ -143,6 +144,8 @@ export default function AskAILawyer({ authToken, documents: propDocs = [] }: Ask
   const [matchedSources, setMatchedSources] = useState<Source[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [activeCitationModal, setActiveCitationModal] = useState<Source | null>(null);
+  const [lawyerProgress, setLawyerProgress] = useState("");
+  const [lawyerError, setLawyerError] = useState("");
 
   // Copy and export statuses
   const [isCopied, setIsCopied] = useState(false);
@@ -255,6 +258,8 @@ export default function AskAILawyer({ authToken, documents: propDocs = [] }: Ask
     setIsStreaming(true);
     setStreamedResult("");
     setMatchedSources([]);
+    setLawyerProgress("Preparing legal advisory request...");
+    setLawyerError("");
     setStepperPhase("division");
     setStepperMessage("Phase 1: Partitioning legal queries, rephrasing regulatory intents, and aligning lexical structures...");
 
@@ -264,6 +269,7 @@ export default function AskAILawyer({ authToken, documents: propDocs = [] }: Ask
       .flatMap(f => f.files.map(file => ({ name: file.name, content: file.content })));
 
     try {
+      setLawyerProgress("Sending request to AI...");
       const response = await fetch(apiUrl("/api/lawyer/ask"), {
         method: "POST",
         headers: {
@@ -283,31 +289,44 @@ export default function AskAILawyer({ authToken, documents: propDocs = [] }: Ask
       if (!response.ok) throw new Error(data.error || "Advisory system failed to respond cleanly.");
 
       if (response.status === 202 && data.job_id) {
+        setLawyerProgress("Analyzing legal queries...");
         const eventSource = new EventSource(apiUrl(`/api/jobs/sse?token=${authToken}`));
 
         eventSource.onmessage = (event) => {
           const payload = JSON.parse(event.data);
           if (payload.event === "job_update" && payload.job.id === data.job_id) {
             const job = payload.job;
-            setStepperMessage(`Progress: ${job.message}`);
+            if (job.message) {
+              setLawyerProgress(job.message);
+              setStepperMessage(`Progress: ${job.message}`);
+            }
 
             if (job.status === "completed") {
               setStreamedResult(job.result.text);
               setStepperPhase("completed");
               setStepperMessage("Analysis complete.");
+              setLawyerProgress("");
               setIsStreaming(false);
               eventSource.close();
             } else if (job.status === "failed") {
-              throw new Error(job.error || "Job failed");
+              eventSource.close();
+              setLawyerError(job.error || "Advisory request failed. Please try again.");
+              setIsStreaming(false);
             }
           }
+        };
+
+        eventSource.onerror = () => {
+          eventSource.close();
+          setLawyerError("Connection to AI engine was interrupted. Please retry.");
+          setIsStreaming(false);
         };
       }
     } catch (err: any) {
       console.error(err);
       setStepperPhase("idle");
       setStepperMessage("");
-      setStreamedResult(`**System Connection Interrupted**\n\nThere was an issue communicating with the legal intelligence engine. Error: ${err.message}`);
+      setLawyerError(err.message || "Advisory system encountered an unexpected error.");
       setIsStreaming(false);
     }
   };
@@ -434,6 +453,18 @@ export default function AskAILawyer({ authToken, documents: propDocs = [] }: Ask
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden h-screen bg-white">
+      
+      {/* SSE progress overlay */}
+      {(isStreaming || !!lawyerError) && (
+        <AiProgressOverlay
+          visible={isStreaming || !!lawyerError}
+          message={lawyerProgress}
+          error={lawyerError}
+          label="Consulting AI Lawyer..."
+          onRetry={lawyerError ? () => { setLawyerError(""); } : undefined}
+          onDismiss={lawyerError ? () => setLawyerError("") : undefined}
+        />
+      )}
       
       {/* HEADER SECTION - ARCHITECTURAL BRAND BAR */}
       <header className="shrink-0 border-b-2 border-black p-5 flex flex-col md:flex-row md:items-center justify-between bg-white">

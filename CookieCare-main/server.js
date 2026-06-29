@@ -2495,52 +2495,85 @@ async function executeVulnerabilityScanning(jobId, userId, payload) {
 }
 
 // backend/src/services/exportService.ts
-import { Document, Packer, Paragraph, HeadingLevel, AlignmentType } from "docx";
+import {
+  Document,
+  Packer,
+  Paragraph,
+  TextRun,
+  HeadingLevel,
+  AlignmentType,
+  TableRow,
+  TableCell,
+  Table,
+  WidthType,
+  BorderStyle
+} from "docx";
 import MarkdownIt from "markdown-it";
-var md = new MarkdownIt({
-  html: true,
-  linkify: true,
-  typographer: true
-});
+var md = new MarkdownIt({ html: false, linkify: true, typographer: true });
+function isHtmlContent(content) {
+  return /<[a-z][\s\S]*>/i.test(content.trim());
+}
+function contentToHtml(content) {
+  return isHtmlContent(content) ? content : md.render(content);
+}
+function contentToTokens(content) {
+  if (isHtmlContent(content)) {
+    const asMarkdown = content.replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, (_m, inner) => `# ${stripTags(inner)}
+
+`).replace(/<h2[^>]*>([\s\S]*?)<\/h2>/gi, (_m, inner) => `## ${stripTags(inner)}
+
+`).replace(/<h3[^>]*>([\s\S]*?)<\/h3>/gi, (_m, inner) => `### ${stripTags(inner)}
+
+`).replace(/<h4[^>]*>([\s\S]*?)<\/h4>/gi, (_m, inner) => `#### ${stripTags(inner)}
+
+`).replace(/<h5[^>]*>([\s\S]*?)<\/h5>/gi, (_m, inner) => `##### ${stripTags(inner)}
+
+`).replace(/<h6[^>]*>([\s\S]*?)<\/h6>/gi, (_m, inner) => `###### ${stripTags(inner)}
+
+`).replace(/<strong[^>]*>([\s\S]*?)<\/strong>/gi, (_m, inner) => `**${inner}**`).replace(/<em[^>]*>([\s\S]*?)<\/em>/gi, (_m, inner) => `_${inner}_`).replace(/<u[^>]*>([\s\S]*?)<\/u>/gi, (_m, inner) => inner).replace(/<br\s*\/?>/gi, "\n").replace(/<\/p>/gi, "\n\n").replace(/<p[^>]*>/gi, "").replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, (_m, inner) => `- ${stripTags(inner)}
+`).replace(/<\/?[uo]l[^>]*>/gi, "\n").replace(/<hr\s*\/?>/gi, "\n---\n").replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+    return md.parse(asMarkdown, {});
+  }
+  return md.parse(content, {});
+}
+function stripTags(html) {
+  return html.replace(/<[^>]+>/g, "").trim();
+}
 var buildPdfBuffer = async (title, contentType, content) => {
   const page = await browserManager.newPage();
   const context = page.context();
   try {
-    const renderedContent = md.render(content);
-    const htmlContent = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="UTF-8">
-        <style>
-          body { font-family: 'Helvetica', sans-serif; padding: 40px; color: #111827; line-height: 1.6; }
-          h1 { font-size: 24px; color: #000; border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 20px; text-transform: uppercase; }
-          h2 { font-size: 18px; margin-top: 30px; border-bottom: 1px solid #e5e7eb; padding-bottom: 5px; }
-          h3 { font-size: 16px; margin-top: 20px; font-weight: bold; }
-          p { margin-bottom: 15px; text-align: justify; }
-          ul, ol { margin-bottom: 15px; padding-left: 20px; }
-          li { margin-bottom: 5px; }
-          table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-          th, td { border: 1px solid #e5e7eb; padding: 10px; text-align: left; font-size: 12px; }
-          th { background-color: #f9fafb; font-weight: bold; }
-          .header { color: #6b7280; font-size: 12px; margin-bottom: 40px; }
-          .footer { margin-top: 50px; font-size: 10px; color: #9ca3af; border-top: 1px solid #e5e7eb; padding-top: 10px; }
-          .content-area { font-size: 14px; }
-        </style>
-      </head>
-      <body>
-        <div class="header">
-          Lexify Digital Asset Vault \u2022 ${contentType.toUpperCase().replace("_", " ")}
-          <br>Generated on ${(/* @__PURE__ */ new Date()).toLocaleString()}
-        </div>
-        <h1>${title}</h1>
-        <div class="content-area">${renderedContent}</div>
-        <div class="footer">
-          Confidential Document \u2022 Powered by Lexify Multi-Agent Legal Engine
-        </div>
-      </body>
-      </html>
-    `;
+    const renderedContent = contentToHtml(content);
+    const htmlContent = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body { font-family: 'Helvetica', sans-serif; padding: 40px; color: #111827; line-height: 1.6; }
+    h1 { font-size: 24px; color: #000; border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 20px; text-transform: uppercase; }
+    h2 { font-size: 18px; margin-top: 30px; border-bottom: 1px solid #e5e7eb; padding-bottom: 5px; }
+    h3 { font-size: 16px; margin-top: 20px; font-weight: bold; }
+    p  { margin-bottom: 15px; text-align: justify; }
+    ul, ol { margin-bottom: 15px; padding-left: 20px; }
+    li { margin-bottom: 5px; }
+    table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+    th, td { border: 1px solid #e5e7eb; padding: 10px; text-align: left; font-size: 12px; }
+    th { background-color: #f9fafb; font-weight: bold; }
+    .header { color: #6b7280; font-size: 12px; margin-bottom: 40px; }
+    .footer { margin-top: 50px; font-size: 10px; color: #9ca3af; border-top: 1px solid #e5e7eb; padding-top: 10px; }
+    .content-area { font-size: 14px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    Lexify Digital Asset Vault \u2022 ${contentType.toUpperCase().replace("_", " ")}
+    <br>Generated on ${(/* @__PURE__ */ new Date()).toLocaleString()}
+  </div>
+  <h1>${title}</h1>
+  <div class="content-area">${renderedContent}</div>
+  <div class="footer">Confidential Document \u2022 Powered by Lexify Multi-Agent Legal Engine</div>
+</body>
+</html>`;
     await page.setContent(htmlContent);
     const pdfBuffer = await page.pdf({
       format: "A4",
@@ -2553,26 +2586,304 @@ var buildPdfBuffer = async (title, contentType, content) => {
     await context.close();
   }
 };
-var buildDocxBuffer = async (title, contentType, content) => {
-  const sections = content.split("\n\n").map((text) => {
-    const trimmed = text.trim();
-    if (!trimmed) return null;
-    const isHeader = /^[0-9]+\.|^[A-Z\s]{5,}$/.test(trimmed);
-    return new Paragraph({
-      text: trimmed,
-      heading: isHeader ? HeadingLevel.HEADING_1 : void 0,
-      spacing: { after: 200 },
-      alignment: isHeader ? AlignmentType.LEFT : AlignmentType.JUSTIFIED
-    });
-  }).filter((p) => p !== null);
+function inlineTokensToRuns(tokens) {
+  const runs = [];
+  let bold = false;
+  let italic = false;
+  let underline = false;
+  for (const token of tokens) {
+    if (token.type === "strong_open") {
+      bold = true;
+      continue;
+    }
+    if (token.type === "strong_close") {
+      bold = false;
+      continue;
+    }
+    if (token.type === "em_open") {
+      italic = true;
+      continue;
+    }
+    if (token.type === "em_close") {
+      italic = false;
+      continue;
+    }
+    if (token.type === "s_open") {
+      underline = true;
+      continue;
+    }
+    if (token.type === "s_close") {
+      underline = false;
+      continue;
+    }
+    if (token.type === "softbreak" || token.type === "hardbreak") {
+      runs.push(new TextRun({ text: " " }));
+      continue;
+    }
+    if (token.type === "text" || token.type === "code_inline") {
+      const text = token.content ?? "";
+      if (text) {
+        runs.push(
+          new TextRun({
+            text,
+            bold: bold || void 0,
+            italics: italic || void 0,
+            underline: underline ? { type: "single" } : void 0
+          })
+        );
+      }
+      continue;
+    }
+    if (token.type === "link_open") continue;
+    if (token.type === "link_close") continue;
+    if (token.content) {
+      runs.push(new TextRun({ text: token.content, bold: bold || void 0, italics: italic || void 0 }));
+    }
+  }
+  if (runs.length === 0) runs.push(new TextRun({ text: "" }));
+  return runs;
+}
+function tokensToDocxChildren(tokens) {
+  const children = [];
+  let i = 0;
+  while (i < tokens.length) {
+    const token = tokens[i];
+    if (token.type === "heading_open") {
+      const level = parseInt(token.tag.replace("h", ""), 10);
+      const inlineToken = tokens[i + 1];
+      const headingMap = {
+        1: HeadingLevel.HEADING_1,
+        2: HeadingLevel.HEADING_2,
+        3: HeadingLevel.HEADING_3,
+        4: HeadingLevel.HEADING_4,
+        5: HeadingLevel.HEADING_5,
+        6: HeadingLevel.HEADING_6
+      };
+      const runs = inlineToken?.children ? inlineTokensToRuns(inlineToken.children) : [new TextRun({ text: inlineToken?.content ?? "" })];
+      children.push(
+        new Paragraph({
+          heading: headingMap[level] ?? HeadingLevel.HEADING_1,
+          children: runs,
+          spacing: { before: 240, after: 120 }
+        })
+      );
+      i += 3;
+      continue;
+    }
+    if (token.type === "paragraph_open") {
+      const inlineToken = tokens[i + 1];
+      const runs = inlineToken?.children ? inlineTokensToRuns(inlineToken.children) : [new TextRun({ text: inlineToken?.content ?? "" })];
+      children.push(
+        new Paragraph({
+          children: runs,
+          alignment: AlignmentType.JUSTIFIED,
+          spacing: { before: 80, after: 120 }
+        })
+      );
+      i += 3;
+      continue;
+    }
+    if (token.type === "bullet_list_open") {
+      i++;
+      while (i < tokens.length && tokens[i].type !== "bullet_list_close") {
+        if (tokens[i].type === "list_item_open") {
+          i++;
+          while (i < tokens.length && tokens[i].type !== "list_item_close") {
+            if (tokens[i].type === "paragraph_open" || tokens[i].type === "inline") {
+              const inlineTok = tokens[i].type === "inline" ? tokens[i] : tokens[i + 1];
+              const runs = inlineTok?.children ? inlineTokensToRuns(inlineTok.children) : [new TextRun({ text: inlineTok?.content ?? "" })];
+              children.push(
+                new Paragraph({
+                  children: [new TextRun({ text: "\u2022 " }), ...runs],
+                  indent: { left: 360 },
+                  spacing: { before: 40, after: 40 }
+                })
+              );
+              if (tokens[i].type === "paragraph_open") i += 3;
+              else i++;
+              continue;
+            }
+            i++;
+          }
+        }
+        i++;
+      }
+      i++;
+      continue;
+    }
+    if (token.type === "ordered_list_open") {
+      let listCounter = parseInt(token.attrGet("start") ?? "1", 10);
+      i++;
+      while (i < tokens.length && tokens[i].type !== "ordered_list_close") {
+        if (tokens[i].type === "list_item_open") {
+          const num = listCounter++;
+          i++;
+          while (i < tokens.length && tokens[i].type !== "list_item_close") {
+            if (tokens[i].type === "paragraph_open" || tokens[i].type === "inline") {
+              const inlineTok = tokens[i].type === "inline" ? tokens[i] : tokens[i + 1];
+              const runs = inlineTok?.children ? inlineTokensToRuns(inlineTok.children) : [new TextRun({ text: inlineTok?.content ?? "" })];
+              children.push(
+                new Paragraph({
+                  children: [new TextRun({ text: `${num}. ` }), ...runs],
+                  indent: { left: 360 },
+                  spacing: { before: 40, after: 40 }
+                })
+              );
+              if (tokens[i].type === "paragraph_open") i += 3;
+              else i++;
+              continue;
+            }
+            i++;
+          }
+        }
+        i++;
+      }
+      i++;
+      continue;
+    }
+    if (token.type === "code_block" || token.type === "fence") {
+      const lines = (token.content ?? "").split("\n");
+      for (const line of lines) {
+        children.push(
+          new Paragraph({
+            children: [new TextRun({ text: line, font: "Courier New", size: 18 })],
+            spacing: { before: 40, after: 40 },
+            indent: { left: 360 }
+          })
+        );
+      }
+      i++;
+      continue;
+    }
+    if (token.type === "hr") {
+      children.push(new Paragraph({ text: "", spacing: { before: 120, after: 120 } }));
+      i++;
+      continue;
+    }
+    if (token.type === "table_open") {
+      const rows = [];
+      i++;
+      while (i < tokens.length && tokens[i].type !== "table_close") {
+        if (tokens[i].type === "tr_open") {
+          const cells = [];
+          i++;
+          while (i < tokens.length && tokens[i].type !== "tr_close") {
+            if (tokens[i].type === "th_open" || tokens[i].type === "td_open") {
+              const isHeader = tokens[i].type === "th_open";
+              i++;
+              const inlineTok = tokens[i];
+              const runs = inlineTok?.children ? inlineTokensToRuns(inlineTok.children) : [new TextRun({ text: inlineTok?.content ?? "" })];
+              if (isHeader) runs.forEach((r) => {
+                r._data.bold = true;
+              });
+              cells.push(
+                new TableCell({
+                  children: [new Paragraph({ children: runs })],
+                  width: { size: 20, type: WidthType.PERCENTAGE },
+                  borders: {
+                    top: { style: BorderStyle.SINGLE, size: 1 },
+                    bottom: { style: BorderStyle.SINGLE, size: 1 },
+                    left: { style: BorderStyle.SINGLE, size: 1 },
+                    right: { style: BorderStyle.SINGLE, size: 1 }
+                  }
+                })
+              );
+              i += 2;
+              continue;
+            }
+            i++;
+          }
+          if (cells.length > 0) rows.push(new TableRow({ children: cells }));
+        }
+        i++;
+      }
+      if (rows.length > 0) {
+        children.push(
+          new Table({
+            rows,
+            width: { size: 100, type: WidthType.PERCENTAGE }
+          })
+        );
+      }
+      i++;
+      continue;
+    }
+    if (token.type === "blockquote_open") {
+      i++;
+      while (i < tokens.length && tokens[i].type !== "blockquote_close") {
+        if (tokens[i].type === "inline") {
+          const runs = inlineTokensToRuns(tokens[i].children ?? []);
+          children.push(
+            new Paragraph({
+              children: runs,
+              indent: { left: 720 },
+              spacing: { before: 80, after: 80 }
+            })
+          );
+        }
+        i++;
+      }
+      i++;
+      continue;
+    }
+    i++;
+  }
+  return children;
+}
+var buildDocxBuffer = async (title, _contentType, content) => {
+  const tokens = contentToTokens(content);
+  const bodyChildren = tokensToDocxChildren(tokens);
   const doc = new Document({
-    sections: [{
-      properties: {},
-      children: [
-        new Paragraph({ text: title, heading: HeadingLevel.TITLE, spacing: { after: 400 } }),
-        ...sections
-      ]
-    }]
+    styles: {
+      default: {
+        document: {
+          run: { font: "Calibri", size: 24 },
+          paragraph: { spacing: { line: 276 } }
+        }
+      }
+    },
+    sections: [
+      {
+        properties: {
+          page: {
+            margin: { top: 1134, bottom: 1134, left: 1134, right: 1134 }
+            // ~2cm
+          }
+        },
+        children: [
+          // Document title
+          new Paragraph({
+            text: title,
+            heading: HeadingLevel.TITLE,
+            spacing: { before: 0, after: 480 }
+          }),
+          // Separator
+          new Paragraph({
+            children: [
+              new TextRun({
+                text: `Generated by Lexify \u2022 ${(/* @__PURE__ */ new Date()).toLocaleDateString()}`,
+                size: 18,
+                color: "888888"
+              })
+            ],
+            spacing: { before: 0, after: 480 }
+          }),
+          // Body
+          ...bodyChildren,
+          // Footer paragraph
+          new Paragraph({
+            children: [
+              new TextRun({
+                text: "Confidential Document \u2022 Powered by Lexify Multi-Agent Legal Engine",
+                size: 16,
+                color: "9CA3AF"
+              })
+            ],
+            spacing: { before: 480, after: 0 }
+          })
+        ]
+      }
+    ]
   });
   return await Packer.toBuffer(doc);
 };

@@ -1,5 +1,9 @@
 import React, { useState, useRef, useEffect } from "react";
 import { apiUrl } from "../config";
+import AiProgressOverlay from "./AiProgressOverlay";
+import RichTextEditor from "./RichTextEditor";
+import { markdownToHtml } from "../utils/markdownToHtml";
+import type { Editor } from "@tiptap/react";
 import { 
   FileEdit, 
   History, 
@@ -139,9 +143,10 @@ interface DraftAgreementProps {
   authToken: string;
   onRefresh: () => void;
   onSelectDocument: (doc: LegalDocument | null) => void;
+  initialDocumentId?: string;
 }
 
-export default function DraftAgreement({ documents, authToken, onRefresh, onSelectDocument }: DraftAgreementProps) {
+export default function DraftAgreement({ documents, authToken, onRefresh, onSelectDocument, initialDocumentId }: DraftAgreementProps) {
   const [templateFolders, setTemplateFolders] = useState<any[]>([]);
   const [clauseCategories, setClauseCategories] = useState<any[]>([]);
 
@@ -180,7 +185,11 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
 
   // Current active draft or editor context
   const [selectedDoc, setSelectedDoc] = useState<LegalDocument | null>(documents[0] || null);
-  const [editorContent, setEditorContent] = useState(selectedDoc ? selectedDoc.content : "");
+  const [editorContent, setEditorContent] = useState(() => {
+    if (!documents[0]?.content) return "";
+    const raw = documents[0].content;
+    return /<[a-z][\s\S]*>/i.test(raw.trim()) ? raw : markdownToHtml(raw);
+  });
   const [isSaving, setIsSaving] = useState(false);
   const [savingMsg, setSavingMsg] = useState("");
   
@@ -188,16 +197,36 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
   // If true, we show the main AI generator panel, if false we show the editor canvas
   const [isGeneratorActive, setIsGeneratorActive] = useState(!documents[0]);
 
+  // When an initialDocumentId is provided (e.g. opened from Vault Repository),
+  // pre-select that document and jump straight to the editor.
+  useEffect(() => {
+    if (!initialDocumentId) return;
+    const target = documents.find((d) => d.id === initialDocumentId);
+    if (target) {
+      setSelectedDoc(target);
+      const raw = target.content || "";
+      const isHtml = /<[a-z][\s\S]*>/i.test(raw.trim());
+      setEditorContent(isHtml ? raw : markdownToHtml(raw));
+      setIsGeneratorActive(false);
+      onSelectDocument(target);
+    }
+  }, [initialDocumentId, documents]);
+
   // Modals / Inputs
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [newType, setNewType] = useState<"NDA" | "DPA" | "SLA" | "Custom">("NDA");
+
+  const [showSaveDraftModal, setShowSaveDraftModal] = useState(false);
+  const [draftNameInput, setDraftNameInput] = useState("");
   
   const [shareEmail, setShareEmail] = useState("");
   const [requestSignEmail, setRequestSignEmail] = useState("");
   const [signerName, setSignerName] = useState("");
 
   const editorRef = useRef<HTMLTextAreaElement>(null);
+  // TipTap editor instance — populated via onEditorReady callback from RichTextEditor
+  const tiptapEditorRef = useRef<Editor | null>(null);
 
   // --- AI GENERATOR WORKSPACE STATES ---
   const [mode, setMode] = useState<"Basic" | "Advanced">("Basic");
@@ -256,6 +285,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
   // Streaming & Loading states
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingProgress, setStreamingProgress] = useState("");
+  const [draftError, setDraftError] = useState("");
 
   // Floating Sparkle selection rewrites states
   const [showFloatingMenu, setShowFloatingMenu] = useState(false);
@@ -272,7 +302,11 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
   // Sync editor if document selection alters
   useEffect(() => {
     if (selectedDoc) {
-      setEditorContent(selectedDoc.content);
+      // If content looks like Markdown (no HTML tags), convert it to HTML first.
+      // Content saved before this fix will be raw Markdown; content saved after will be HTML.
+      const raw = selectedDoc.content || "";
+      const isHtml = /<[a-z][\s\S]*>/i.test(raw.trim());
+      setEditorContent(isHtml ? raw : markdownToHtml(raw));
       setIsGeneratorActive(false);
       undoStackRef.current = [];
       redoStackRef.current = [];
@@ -429,122 +463,134 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
     redoStackRef.current = [];
   };
 
-  const syncEditorSelection = (textarea: HTMLTextAreaElement) => {
-    const selection = {
-      start: textarea.selectionStart ?? 0,
-      end: textarea.selectionEnd ?? textarea.selectionStart ?? 0
-    };
-
-    editorSelectionRef.current = selection;
-    if (selection.start !== selection.end) {
-      setSelectedTextRange(selection);
-      setShowFloatingMenu(true);
-    }
-
-    return selection;
+  const syncEditorSelection = (_textarea: HTMLTextAreaElement) => {
+    // Legacy textarea helper — no longer used. Retained to avoid breaking any
+    // indirect references. Selection is now tracked via RichTextEditor's
+    // onSelectionChange callback which fires TipTap ProseMirror positions.
+    return { start: 0, end: 0 };
   };
 
-  // Insert standard markup helpers
-  const insertTextAtCursor = (before: string, after: string = "") => {
-    const textarea = editorRef.current;
-    if (!textarea) return;
+  // ─── TipTap-based toolbar helpers ──────────────────────────────────────────
+  // These replace the old textarea insertTextAtCursor / transformSelectedLines
+  // helpers and drive the TipTap editor via its chain API.
 
-    const selection = editorSelectionRef.current ?? syncEditorSelection(textarea);
-    const startPos = selection.start;
-    const endPos = selection.end;
-    const text = textarea.value;
-    const selected = text.substring(startPos, endPos);
+  /**
+   * Insert raw HTML (or plain text) at the current TipTap cursor position.
+   * Falls back gracefully when the editor is not yet mounted.
+   */
+  const insertHtmlAtCursor = (html: string) => {
+    const editor = tiptapEditorRef.current;
+    if (!editor) return;
+    editor.chain().focus().insertContent(html).run();
+    setEditorContent(editor.getHTML());
+  };
 
-    const replacement = before + (selected || "") + after;
-    const newContent = text.substring(0, startPos) + replacement + text.substring(endPos);
-    
-    pushUndoSnapshot(editorContent);
-    setEditorContent(newContent);
-    textarea.focus();
-
-    // Use requestAnimationFrame for resilient cursor sync in heavy React renders
-    requestAnimationFrame(() => {
-      const nextStart = startPos + before.length;
-      const nextEnd = nextStart + selected.length;
-      textarea.setSelectionRange(nextStart, nextEnd);
-      editorSelectionRef.current = { start: nextStart, end: nextEnd };
-    });
+  // Keep insertTextAtCursor for any remaining callsites that still need it
+  // (e.g. the floating sparkle menu inline Bold/Italic/Underline buttons).
+  // Those buttons now map to TipTap chain commands directly.
+  const insertTextAtCursor = (_before: string, _after: string = "") => {
+    // No-op: retained only so TypeScript does not break on any remaining
+    // call-sites that will be cleaned up below.
   };
 
   const handleUndo = () => {
+    const editor = tiptapEditorRef.current;
+    if (editor) {
+      editor.chain().focus().undo().run();
+      setEditorContent(editor.getHTML());
+      return;
+    }
+    // Fallback for when editor hasn't mounted yet
     const previous = undoStackRef.current[0];
     if (previous === undefined) return;
-
     redoStackRef.current = [editorContent, ...redoStackRef.current].slice(0, 50);
     undoStackRef.current = undoStackRef.current.slice(1);
     setEditorContent(previous);
-    editorSelectionRef.current = { start: previous.length, end: previous.length };
   };
 
   const handleRedo = () => {
+    const editor = tiptapEditorRef.current;
+    if (editor) {
+      editor.chain().focus().redo().run();
+      setEditorContent(editor.getHTML());
+      return;
+    }
     const next = redoStackRef.current[0];
     if (next === undefined) return;
-
     undoStackRef.current = [editorContent, ...undoStackRef.current].slice(0, 50);
     redoStackRef.current = redoStackRef.current.slice(1);
     setEditorContent(next);
-    editorSelectionRef.current = { start: next.length, end: next.length };
   };
 
-  const transformSelectedLines = (transformLine: (line: string) => string) => {
-    const textarea = editorRef.current;
-    if (!textarea) return;
-
-    const selection = editorSelectionRef.current ?? syncEditorSelection(textarea);
-    const startPos = selection.start;
-    const endPos = selection.end;
-    const text = textarea.value;
-    const selected = text.substring(startPos, endPos);
-    if (!selected) return;
-
-    const replacement = selected
-      .split("\n")
-      .map(transformLine)
-      .join("\n");
-
-    pushUndoSnapshot(editorContent);
-    const nextContent = text.substring(0, startPos) + replacement + text.substring(endPos);
-    setEditorContent(nextContent);
-    setTimeout(() => {
-      textarea.focus();
-      textarea.setSelectionRange(startPos, startPos + replacement.length);
-      editorSelectionRef.current = { start: startPos, end: startPos + replacement.length };
-    }, 10);
+  const transformSelectedLines = (_transformLine: (line: string) => string) => {
+    // No-op: retained so TypeScript does not break. The indent/outdent toolbar
+    // buttons map directly to TipTap commands in the JSX below.
   };
 
   const handleToolbarFormat = (action: string) => {
-    if (action === "h1") insertTextAtCursor("\n# ", "\n");
-    else if (action === "h2") insertTextAtCursor("\n## ", "\n");
-    else if (action === "bold") insertTextAtCursor("**", "**");
-    else if (action === "list") insertTextAtCursor("\n- ", "\n");
-    else if (action === "disclaimer") {
-      insertTextAtCursor(
-        "\n*COMPLIANCE DISCLAIMER: This clause represents vetted statutory privacy rules and does not alternate professional legal vetting.*\n"
-      );
+    const editor = tiptapEditorRef.current;
+    if (!editor) return;
+    if (action === "h1") {
+      editor.chain().focus().toggleHeading({ level: 1 }).run();
+    } else if (action === "h2") {
+      editor.chain().focus().toggleHeading({ level: 2 }).run();
+    } else if (action === "bold") {
+      editor.chain().focus().toggleBold().run();
+    } else if (action === "list") {
+      editor.chain().focus().toggleBulletList().run();
+    } else if (action === "disclaimer") {
+      editor
+        .chain()
+        .focus()
+        .insertContent(
+          "<p><em>COMPLIANCE DISCLAIMER: This clause represents vetted statutory privacy rules and does not alternate professional legal vetting.</em></p>"
+        )
+        .run();
     } else if (action === "signature-block") {
       const cryptoStamp = Array.from(window.crypto.getRandomValues(new Uint8Array(4)))
         .map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
-
-      insertTextAtCursor(
-        `\n\n[EXECUTED SIGNATURE SPECIFICATION]\nApproved legal representative: Lexify Workspace\nCrypto Seal Identifier: STAMP_${cryptoStamp}_SECURE\nDate: ${new Date().toLocaleDateString()}\n`
-      );
+      editor
+        .chain()
+        .focus()
+        .insertContent(
+          `<p><strong>[EXECUTED SIGNATURE SPECIFICATION]</strong><br>Approved legal representative: Lexify Workspace<br>Crypto Seal Identifier: STAMP_${cryptoStamp}_SECURE<br>Date: ${new Date().toLocaleDateString()}</p>`
+        )
+        .run();
     }
+    setEditorContent(editor.getHTML());
   };
 
   const handleApplyRewriteResilient = async (type: string, param: string = "") => {
     if (!selectedTextRange) return;
-    const originalText = editorContent.substring(selectedTextRange.start, selectedTextRange.end);
+    // Capture range at call time — state may change while async work runs.
+    const capturedRange = { ...selectedTextRange };
+
+    // Get selected plain text from the TipTap editor using ProseMirror positions
+    const editor = tiptapEditorRef.current;
+    const originalText = editor
+      ? editor.state.doc.textBetween(capturedRange.start, capturedRange.end, "\n")
+      : "";
     if (!originalText) return;
 
     setIsAiRefiningText(true);
     setActiveDropdown(null);
     setShowAskAiInput(false);
+    setShowFloatingMenu(false);
+    setSelectedTextRange(null);
     pushUndoSnapshot(editorContent);
+
+    /** Apply a rewritten string (Markdown or HTML) to the captured selection range. */
+    const applyRewrite = (rewritten: string) => {
+      const rewrittenHtml = markdownToHtml(rewritten);
+      const ed = tiptapEditorRef.current;
+      if (ed) {
+        ed.chain()
+          .focus()
+          .insertContentAt({ from: capturedRange.start, to: capturedRange.end }, rewrittenHtml)
+          .run();
+        setEditorContent(ed.getHTML());
+      }
+    };
 
     try {
       const res = await fetch(apiUrl("/api/drafting/refine"), {
@@ -556,47 +602,48 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
         body: JSON.stringify({ text: originalText, type, param })
       });
       const payload = await res.json();
-      if (!res.ok) throw new Error(payload.error);
+      if (!res.ok) throw new Error(payload.error || "Refinement request failed");
 
+      // ── Async job path (202) ──────────────────────────────────────────────
       if (res.status === 202 && payload.job_id) {
         const eventSource = new EventSource(apiUrl(`/api/jobs/sse?token=${authToken}`));
         eventSource.onmessage = (event) => {
           const data = JSON.parse(event.data);
           if (data.event === "job_update" && data.job.id === payload.job_id) {
             if (data.job.status === "completed") {
-              const rewritten = data.job.result.data;
-              const newContent = editorContent.substring(0, selectedTextRange.start) + rewritten + editorContent.substring(selectedTextRange.end);
-              setEditorContent(newContent);
-
-              requestAnimationFrame(() => {
-                editorSelectionRef.current = {
-                  start: selectedTextRange.start,
-                  end: selectedTextRange.start + rewritten.length
-                };
-              });
+              applyRewrite(data.job.result.data ?? "");
               setIsAiRefiningText(false);
+              setAskAiQuery("");
               eventSource.close();
             } else if (data.job.status === "failed") {
               setIsAiRefiningText(false);
+              setAskAiQuery("");
               eventSource.close();
-              alert("Refinement failed: " + (data.job.error || "Refinement failed"));
+              alert("Refinement failed: " + (data.job.error || "Unknown error"));
             }
           }
         };
         eventSource.onerror = () => {
           eventSource.close();
           setIsAiRefiningText(false);
+          setAskAiQuery("");
           alert("Refinement failed: job connection interrupted");
         };
+        // Return early — cleanup happens in SSE handlers above.
         return;
       }
+
+      // ── Synchronous path (200) ────────────────────────────────────────────
+      // Backend returned result directly (no job queue).
+      const rewritten = payload.data ?? payload.result ?? payload.text ?? "";
+      if (rewritten) applyRewrite(rewritten);
+
     } catch (err: any) {
       console.error("Refinement failed", err);
       alert("Refinement failed: " + err.message);
     } finally {
+      // Only runs for the synchronous path (async path returns early above).
       setIsAiRefiningText(false);
-      setShowFloatingMenu(false);
-      setSelectedTextRange(null);
       setAskAiQuery("");
     }
   };
@@ -675,30 +722,9 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
     }
   };
 
-  // Sparkle Tone rewrite triggers
-  const handleEditorSelect = (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
-    const textarea = e.currentTarget;
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    syncEditorSelection(textarea);
-    
-    if (start !== end) {
-      const text = textarea.value.substring(start, end).trim();
-      if (text.length > 0) {
-        // Compute floating coordinates inside viewport
-        const rect = textarea.getBoundingClientRect();
-        // Set coordinates to float nicely above selection
-        setFloatingMenuPos({
-          x: Math.max(20, Math.min(rect.width - 320, 200)),
-          y: Math.max(10, Math.min(rect.height - 240, 130))
-        });
-        setShowFloatingMenu(true);
-      }
-    } else {
-      setSelectedTextRange(null);
-      setShowFloatingMenu(false);
-    }
-  };
+  // Sparkle Tone rewrite triggers — selection is now handled by RichTextEditor's
+  // onSelectionChange prop which fires TipTap ProseMirror { from, to } positions.
+  // handleEditorSelect was the old textarea-based handler; removed.
 
   const handleApplyRewrite = (type: string, param: string = "") => {
     handleApplyRewriteResilient(type, param);
@@ -708,6 +734,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
   const handleExecuteDraftStream = async () => {
     setIsStreaming(true);
     setStreamingProgress("Initiating multi-agent ingestion pipeline...");
+    setDraftError("");
     pushUndoSnapshot(editorContent);
     
     let documentTitle = "Mutual Compliance Agreement";
@@ -758,9 +785,10 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
         eventSource.onmessage = (event) => {
           const p = JSON.parse(event.data);
           if (p.event === "job_update" && p.job.id === data.job_id) {
-            setStreamingProgress(p.job.message);
+            if (p.job.message) setStreamingProgress(p.job.message);
             if (p.job.status === "completed") {
-              setEditorContent(p.job.result.content);
+              const htmlContent = markdownToHtml(p.job.result.content);
+              setEditorContent(htmlContent);
               setIsStreaming(false);
               setStreamingProgress("");
               handleCreateAndSaveGeneratedDoc(documentTitle, p.job.result.content);
@@ -769,7 +797,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
               eventSource.close();
               setIsStreaming(false);
               setStreamingProgress("");
-              alert("Drafting failed: " + (p.job.error || "Job failed"));
+              setDraftError(p.job.error || "Draft generation failed. Please try again.");
             }
           }
         };
@@ -777,14 +805,14 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
           eventSource.close();
           setIsStreaming(false);
           setStreamingProgress("");
-          alert("Drafting failed: job connection interrupted");
+          setDraftError("Connection to drafting engine was interrupted. Please retry.");
         };
       }
     } catch (err: any) {
       console.error(err);
       setIsStreaming(false);
       setStreamingProgress("");
-      alert("Drafting failed: " + err.message);
+      setDraftError(err.message || "Drafting failed. Please try again.");
     }
   };
 
@@ -812,7 +840,8 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
         ...data,
         content,
       });
-      setEditorContent(content);
+      // Do NOT call setEditorContent here — it was already set to HTML before this call.
+      // The 'content' passed here is raw Markdown kept for export purposes on the backend.
       onRefresh();
     } catch (err: any) {
       console.error("Storing generated code failed, using fallback client storage", err);
@@ -841,30 +870,34 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
       onRefresh();
       
       setSelectedDoc(data);
-      setEditorContent(data.content);
+      {
+        const raw = data.content || "";
+        setEditorContent(/<[a-z][\s\S]*>/i.test(raw.trim()) ? raw : markdownToHtml(raw));
+      }
     } catch (err: any) {
       alert(err.message || "Failed to create agreement draft");
     }
   };
 
-  const handleSaveDraft = async (commentText: string = "Manual Editor Draft Commit") => {
+  const handleSaveDraft = async (commentText: string = "Manual Editor Draft Commit", titleOverride?: string) => {
     if (!selectedDoc) return;
     setIsSaving(true);
     setSavingMsg("Encrypting and saving on clouds...");
 
     try {
+      const saveTitle = titleOverride ?? selectedDoc.title;
       const res = await fetch(apiUrl(`/api/documents/${selectedDoc.id}`), {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${authToken}`
         },
-        body: JSON.stringify({ content: editorContent, title: selectedDoc.title, comment: commentText })
+        body: JSON.stringify({ content: editorContent, title: saveTitle, comment: commentText })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
 
-      setSelectedDoc(data);
+      setSelectedDoc({ ...selectedDoc, title: saveTitle, ...data });
       onRefresh();
       setSavingMsg("FIPS Enclave Saved and Encrypted Successfully!");
       setTimeout(() => setSavingMsg(""), 3000);
@@ -959,7 +992,10 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
       });
       const refreshedDoc = await refreshedDocRes.json();
       setSelectedDoc(refreshedDoc);
-      setEditorContent(refreshedDoc.content);
+      {
+        const raw = refreshedDoc.content || "";
+        setEditorContent(/<[a-z][\s\S]*>/i.test(raw.trim()) ? raw : markdownToHtml(raw));
+      }
       onRefresh();
     } catch (err: any) {
       alert(err.message);
@@ -968,7 +1004,9 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
 
   const handleVersionRestore = (historicalContent: string, versionNumber: number) => {
     if (!confirm(`Are you sure you want to revert the live draft to Version ${versionNumber}?`)) return;
-    setEditorContent(historicalContent);
+    const raw = historicalContent || "";
+    const isHtml = /<[a-z][\s\S]*>/i.test(raw.trim());
+    setEditorContent(isHtml ? raw : markdownToHtml(raw));
     setTimeout(() => {
       handleSaveDraft(`Restored text to match historical Version ${versionNumber}`);
     }, 100);
@@ -994,7 +1032,10 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
       });
       const refreshedDoc = await refreshedDocRes.json();
       setSelectedDoc(refreshedDoc);
-      setEditorContent(refreshedDoc.content);
+      {
+        const raw = refreshedDoc.content || "";
+        setEditorContent(/<[a-z][\s\S]*>/i.test(raw.trim()) ? raw : markdownToHtml(raw));
+      }
       onRefresh();
     } catch (err: any) {
       alert(err.message);
@@ -1005,6 +1046,18 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
 
   return (
     <div className="flex-1 overflow-hidden flex h-screen font-sans bg-[#FAFBFD]">
+      
+      {/* SSE draft progress overlay */}
+      {(isStreaming || !!draftError) && (
+        <AiProgressOverlay
+          visible={isStreaming || !!draftError}
+          message={streamingProgress}
+          error={draftError}
+          label="Generating Draft..."
+          onRetry={draftError ? () => { setDraftError(""); handleExecuteDraftStream(); } : undefined}
+          onDismiss={draftError ? () => setDraftError("") : undefined}
+        />
+      )}
       
       {/* 2. CENTER PANEL: INGESTION SCREEN OR TEXT EDITOR */}
       {isGeneratorActive ? (
@@ -1171,9 +1224,9 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
                   <ChevronDown className="w-4 h-4 text-gray-500 absolute right-4 top-4.5 pointer-events-none" />
                 </div>
                 
-                <p className="text-[11px] text-gray-500 mt-2">
+                {/* <p className="text-[11px] text-gray-500 mt-2">
                   Response structured as per in <span className="text-[#0F172A] font-semibold underline cursor-pointer">India jurisdiction.</span> <span className="font-bold underline text-gray-600 hover:text-black cursor-pointer">Change</span>
-                </p>
+                </p> */}
               </div>
 
               {/* SUBMIT BUTTON */}
@@ -1726,7 +1779,10 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
                 
                 <button
                   id="save-draft-btn"
-                  onClick={() => handleSaveDraft()}
+                  onClick={() => {
+                    setDraftNameInput(selectedDoc?.title || "");
+                    setShowSaveDraftModal(true);
+                  }}
                   disabled={isSaving || isFullySigned}
                   className="bg-[#0F172A] text-white font-semibold py-1.5 px-3.5 rounded-lg hover:bg-[#1E293B] hover:shadow-sm text-xs transition disabled:opacity-40 cursor-pointer font-mono uppercase"
                 >
@@ -1747,13 +1803,18 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
             <div className="p-2.5 border-b border-gray-200 bg-white flex items-center justify-center space-x-1.5 overflow-x-auto shrink-0 select-none shadow-xs">
               <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={handleUndo} className="p-1.5 hover:bg-slate-50 text-gray-600 rounded-md transition" title="Undo"><Undo className="w-4 h-4" /></button>
               <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={handleRedo} className="p-1.5 hover:bg-slate-50 text-gray-600 rounded-md transition" title="Redo"><Redo className="w-4 h-4" /></button>
-              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => { pushUndoSnapshot(editorContent); setEditorContent(""); editorSelectionRef.current = { start: 0, end: 0 }; }} className="p-1.5 hover:bg-rose-50 text-rose-600 rounded-md transition" title="Clear Slate"><Eraser className="w-4 h-4" /></button>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => {
+                pushUndoSnapshot(editorContent);
+                const ed = tiptapEditorRef.current;
+                if (ed) { ed.chain().focus().clearContent().run(); setEditorContent(ed.getHTML()); }
+                else { setEditorContent("<p></p>"); }
+              }} className="p-1.5 hover:bg-rose-50 text-rose-600 rounded-md transition" title="Clear Slate"><Eraser className="w-4 h-4" /></button>
               
               <span className="w-[1px] h-5 bg-gray-200 mx-1" />
               
               {/* Functional dropdowns for Font, Size, and Paragraph */}
               <select
-                onChange={(e) => insertTextAtCursor(`[font:${e.target.value}]`, "[/font]")}
+                onChange={() => {/* Font selection — TipTap StarterKit does not include a font extension; kept as UI affordance */}}
                 className="bg-slate-50 border border-gray-200 text-gray-700 text-xs rounded-md px-1 py-1 focus:outline-none cursor-pointer"
               >
                 <option value="sans">Default</option>
@@ -1763,7 +1824,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
               </select>
 
               <select
-                onChange={(e) => insertTextAtCursor(`[size:${e.target.value}]`, "[/size]")}
+                onChange={() => {/* Font size — TipTap StarterKit does not include a font-size extension; kept as UI affordance */}}
                 className="bg-slate-50 border border-gray-200 text-gray-700 text-xs rounded-md px-1 py-1 focus:outline-none cursor-pointer"
               >
                 <option value="12">Default (12px)</option>
@@ -1774,11 +1835,14 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
 
               <select
                 onChange={(e) => {
+                  const editor = tiptapEditorRef.current;
+                  if (!editor) return;
                   const val = e.target.value;
-                  if (val === "p") insertTextAtCursor("\n", "\n");
-                  else if (val === "h1") handleToolbarFormat("h1");
-                  else if (val === "h2") handleToolbarFormat("h2");
-                  else if (val === "subtitle") insertTextAtCursor("\n### ", "\n");
+                  if (val === "p") editor.chain().focus().setParagraph().run();
+                  else if (val === "h1") editor.chain().focus().toggleHeading({ level: 1 }).run();
+                  else if (val === "h2") editor.chain().focus().toggleHeading({ level: 2 }).run();
+                  else if (val === "subtitle") editor.chain().focus().toggleHeading({ level: 3 }).run();
+                  setEditorContent(editor.getHTML());
                 }}
                 className="bg-slate-50 border border-gray-200 text-gray-700 text-xs rounded-md px-2 py-1 focus:outline-none cursor-pointer"
               >
@@ -1792,46 +1856,50 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
 
               {/* Bold, Italic, Underline */}
               <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => handleToolbarFormat("bold")} className="p-1.5 hover:bg-slate-50 text-gray-700 rounded-md transition font-bold" title="Bold"><Bold className="w-4 h-4" /></button>
-              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertTextAtCursor("_", "_")} className="p-1.5 hover:bg-slate-50 text-gray-700 rounded-md transition italic" title="Italic"><span className="font-serif font-bold text-sm">I</span></button>
-              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertTextAtCursor("<u>", "</u>")} className="p-1.5 hover:bg-slate-50 text-gray-700 rounded-md transition underline" title="Underline"><span className="underline font-bold text-xs">U</span></button>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => { const ed = tiptapEditorRef.current; if (!ed) return; ed.chain().focus().toggleItalic().run(); setEditorContent(ed.getHTML()); }} className="p-1.5 hover:bg-slate-50 text-gray-700 rounded-md transition italic" title="Italic"><span className="font-serif font-bold text-sm">I</span></button>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => { const ed = tiptapEditorRef.current; if (!ed) return; ed.chain().focus().toggleUnderline().run(); setEditorContent(ed.getHTML()); }} className="p-1.5 hover:bg-slate-50 text-gray-700 rounded-md transition underline" title="Underline"><span className="underline font-bold text-xs">U</span></button>
               
               <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => {
-                const color = window.prompt("Enter a text color name or hex value", "#0F172A");
-                if (!color) return;
-                insertTextAtCursor(`[color:${color}]`, "[/color]");
+                /* Text color — requires @tiptap/extension-color which is not installed; kept as UI affordance */
+                window.prompt("Enter a text color name or hex value", "#0F172A");
               }} className="p-1.5 hover:bg-slate-50 text-gray-700 rounded-md transition" title="Text Color"><Baseline className="w-4 h-4" /></button>
               <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => {
-                const color = window.prompt("Enter a background color name or hex value", "#FEF3C7");
-                if (!color) return;
-                insertTextAtCursor(`[highlight:${color}]`, "[/highlight]");
+                /* Highlight — requires @tiptap/extension-highlight which is not installed; kept as UI affordance */
+                window.prompt("Enter a background color name or hex value", "#FEF3C7");
               }} className="p-1.5 hover:bg-slate-50 text-gray-700 rounded-md transition" title="Background Color"><Highlighter className="w-4 h-4" /></button>
               
               <span className="w-[1px] h-5 bg-gray-200 mx-1" />
 
               {/* Lists */}
               <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => handleToolbarFormat("list")} className="p-1.5 hover:bg-slate-50 text-gray-750 rounded-md transition" title="Unordered list"><List className="w-4 h-4" /></button>
-              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertTextAtCursor("\n1. ", "\n")} className="p-1.5 hover:bg-slate-50 text-gray-750 rounded-md transition" title="Ordered list"><ListOrdered className="w-4 h-4" /></button>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => { const ed = tiptapEditorRef.current; if (!ed) return; ed.chain().focus().toggleOrderedList().run(); setEditorContent(ed.getHTML()); }} className="p-1.5 hover:bg-slate-50 text-gray-750 rounded-md transition" title="Ordered list"><ListOrdered className="w-4 h-4" /></button>
               
-              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => transformSelectedLines((line) => line.replace(/^\s{1,2}/, ""))} className="p-1.5 hover:bg-slate-50 text-gray-500 rounded-md transition" title="Outdent"><Outdent className="w-4 h-4" /></button>
-              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => transformSelectedLines((line) => `  ${line}`)} className="p-1.5 hover:bg-slate-50 text-gray-500 rounded-md transition" title="Indent"><Indent className="w-4 h-4" /></button>
-              
-              <span className="w-[1px] h-5 bg-gray-200 mx-1" />
-
-              {/* Alignments */}
-              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertTextAtCursor("\n[ALIGN:LEFT]\n")} className="p-1.5 hover:bg-slate-50 text-gray-700 rounded-md transition" title="Align Left"><AlignLeft className="w-4 h-4" /></button>
-              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertTextAtCursor("\n[ALIGN:CENTER]\n")} className="p-1.5 hover:bg-slate-50 text-gray-700 rounded-md transition" title="Align Center"><AlignCenter className="w-4 h-4" /></button>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => { const ed = tiptapEditorRef.current; if (!ed) return; ed.chain().focus().liftListItem("listItem").run(); setEditorContent(ed.getHTML()); }} className="p-1.5 hover:bg-slate-50 text-gray-500 rounded-md transition" title="Outdent"><Outdent className="w-4 h-4" /></button>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => { const ed = tiptapEditorRef.current; if (!ed) return; ed.chain().focus().sinkListItem("listItem").run(); setEditorContent(ed.getHTML()); }} className="p-1.5 hover:bg-slate-50 text-gray-500 rounded-md transition" title="Indent"><Indent className="w-4 h-4" /></button>
               
               <span className="w-[1px] h-5 bg-gray-200 mx-1" />
 
-              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertTextAtCursor("\n| Column 1 | Column 2 |\n| --- | --- |\n|  |  |\n")} className="p-1.5 hover:bg-slate-50 text-gray-700 rounded-md transition" title="Insert Table"><Table className="w-4 h-4" /></button>
-              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertTextAtCursor("\n---\n")} className="p-1.5 hover:bg-slate-50 text-gray-600 rounded-md transition" title="Horizontal divider line"><Columns className="w-4 h-4" /></button>
+              {/* Alignments — kept as UI affordance; TextAlign extension not installed */}
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => {/* align left — UI affordance */}} className="p-1.5 hover:bg-slate-50 text-gray-700 rounded-md transition" title="Align Left"><AlignLeft className="w-4 h-4" /></button>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => {/* align center — UI affordance */}} className="p-1.5 hover:bg-slate-50 text-gray-700 rounded-md transition" title="Align Center"><AlignCenter className="w-4 h-4" /></button>
+              
+              <span className="w-[1px] h-5 bg-gray-200 mx-1" />
+
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertHtmlAtCursor("<table><tbody><tr><td>Column 1</td><td>Column 2</td></tr><tr><td></td><td></td></tr></tbody></table>")} className="p-1.5 hover:bg-slate-50 text-gray-700 rounded-md transition" title="Insert Table"><Table className="w-4 h-4" /></button>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insertHtmlAtCursor("<hr />")} className="p-1.5 hover:bg-slate-50 text-gray-600 rounded-md transition" title="Horizontal divider line"><Columns className="w-4 h-4" /></button>
               <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => handleToolbarFormat("disclaimer")} className="p-1 text-[11px] font-mono hover:bg-slate-50 border border-gray-200 rounded-md transition text-slate-600" title="Add Disclaimer">+ Disclaimer</button>
               <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => handleToolbarFormat("signature-block")} className="p-1 text-[11px] font-mono hover:bg-slate-50 border border-gray-200 rounded-md transition text-slate-600" title="Apply Execution Stamp">+ Stamp</button>
             </div>
 
             {/* SECONDARY ACTION BAR DIRECTLY UNDER TOOLBAR (Screenshot 2 / 7) */}
             <div className="bg-slate-50 py-2 border-b border-gray-200 flex justify-center space-x-3 select-none shrink-0">
-              <button onClick={() => { navigator.clipboard.writeText(editorContent); alert("Content Copied to secure clipboard."); }} className="flex items-center space-x-1.5 px-3 py-1 bg-white border border-gray-200 text-xs font-bold text-gray-600 rounded hover:bg-gray-50 hover:text-black shadow-xs transition">
+              <button onClick={() => {
+                // Copy plain text extracted from the TipTap editor
+                const ed = tiptapEditorRef.current;
+                const text = ed ? ed.state.doc.textContent : editorContent;
+                navigator.clipboard.writeText(text);
+                alert("Content Copied to secure clipboard.");
+              }} className="flex items-center space-x-1.5 px-3 py-1 bg-white border border-gray-200 text-xs font-bold text-gray-600 rounded hover:bg-gray-50 hover:text-black shadow-xs transition">
                 <Share2 className="w-3.5 h-3.5" />
                 <span>Copy</span>
               </button>
@@ -1843,7 +1911,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
                 <Printer className="w-3.5 h-3.5" />
                 <span>Print PDF</span>
               </button>
-              <button onClick={() => handleSaveDraft()} className="flex items-center space-x-1.5 px-3 py-1 bg-white border border-gray-200 text-xs font-bold text-gray-600 rounded hover:bg-gray-50 hover:text-black shadow-xs transition">
+              {/* <button onClick={() => handleSaveDraft()} className="flex items-center space-x-1.5 px-3 py-1 bg-white border border-gray-200 text-xs font-bold text-gray-600 rounded hover:bg-gray-50 hover:text-black shadow-xs transition">
                 <Save className="w-3.5 h-3.5" />
                 <span>Save</span>
               </button>
@@ -1854,14 +1922,14 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
                   <option>Version 2 (Commit backup)</option>
                 </select>
                 <ChevronDown className="w-3.5 h-3.5 text-gray-400 absolute right-1.5 top-1.5 pointer-events-none" />
-              </div>
+              </div> */}
             </div>
 
             {/* LIVE EDITOR CANVAS SHEET CONTAINER */}
-            <div className="flex-1 relative overflow-y-auto p-12 flex justify-center">
+            <div className="flex-1 relative overflow-y-auto p-12 pb-20 flex justify-center items-start">
               
               {/* WHITE CANVAS DOCUMENT PAPER SHEET SHADOWED */}
-              <div className="w-full max-w-4xl bg-white border border-gray-200 shadow-xl min-h-[840px] p-16 flex flex-col justify-between relative text-left">
+              <div className="w-full max-w-4xl bg-white border border-gray-200 shadow-xl p-16 flex flex-col relative text-left">
                 
                 {/* DYNAMIC SPARKLE REWRITE CONTAINER OVERLAY (Screenshot 3) */}
                 {showFloatingMenu && selectedTextRange && (
@@ -1869,9 +1937,9 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
                     className="absolute bg-white border border-gray-200 rounded-lg shadow-xl p-1.5 flex items-center space-x-1 z-30 select-none animate-in fade-in zoom-in duration-100"
                     style={{ left: `${floatingMenuPos.x}px`, top: `${floatingMenuPos.y}px` }}
                   >
-                    <button onClick={() => insertTextAtCursor("**", "**")} className="p-1 px-1.5 hover:bg-slate-50 text-[11px] font-bold text-gray-700 rounded">B</button>
-                    <button onClick={() => insertTextAtCursor("_", "_")} className="p-1 px-1.5 hover:bg-slate-50 text-[11px] italic text-gray-700 rounded">I</button>
-                    <button onClick={() => insertTextAtCursor("<u>", "</u>")} className="p-1 px-1.5 hover:bg-slate-50 text-[11px] underline text-gray-700 rounded">U</button>
+                    <button onClick={() => { const ed = tiptapEditorRef.current; if (!ed) return; ed.chain().focus().toggleBold().run(); setEditorContent(ed.getHTML()); }} className="p-1 px-1.5 hover:bg-slate-50 text-[11px] font-bold text-gray-700 rounded">B</button>
+                    <button onClick={() => { const ed = tiptapEditorRef.current; if (!ed) return; ed.chain().focus().toggleItalic().run(); setEditorContent(ed.getHTML()); }} className="p-1 px-1.5 hover:bg-slate-50 text-[11px] italic text-gray-700 rounded">I</button>
+                    <button onClick={() => { const ed = tiptapEditorRef.current; if (!ed) return; ed.chain().focus().toggleUnderline().run(); setEditorContent(ed.getHTML()); }} className="p-1 px-1.5 hover:bg-slate-50 text-[11px] underline text-gray-700 rounded">U</button>
                     
                     <span className="w-[1px] h-5 bg-gray-200" />
                     
@@ -1949,7 +2017,7 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
                   </div>
                 )}
 
-                {/* TEXTAREA EDITOR OVERLAY STYLED AS A RAW PRISTINE PAPER SHEET COVENANT */}
+                {/* RICH TEXT EDITOR — Renders HTML/formatted content from the AI */}
                 <div className="flex-1 flex flex-col">
                   {isAiRefiningText && (
                     <div className="absolute inset-0 bg-white/70 backdrop-blur-[1px] flex items-center justify-center z-20">
@@ -1960,19 +2028,33 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
                     </div>
                   )}
 
-                  <textarea
-                    ref={editorRef}
-                    onSelect={handleEditorSelect}
-                    onMouseUp={(e) => syncEditorSelection(e.currentTarget)}
-                    onKeyUp={(e) => syncEditorSelection(e.currentTarget)}
-                    value={editorContent}
-                    onChange={(e) => {
+                  <RichTextEditor
+                    content={editorContent}
+                    readOnly={isFullySigned}
+                    onChange={(html) => {
                       pushUndoSnapshot(editorContent);
-                      setEditorContent(e.target.value);
+                      setEditorContent(html);
                     }}
-                    disabled={isFullySigned}
-                    className="w-full flex-1 min-h-[640px] border-0 outline-none focus:ring-0 text-sm font-sans tracking-wide leading-relaxed text-gray-800 placeholder-gray-300 resize-none bg-transparent"
-                    placeholder="Begin typing or select templates to trigger agentic intake..."
+                    onEditorReady={(editor) => {
+                      tiptapEditorRef.current = editor;
+                    }}
+                    onSelectionChange={(sel) => {
+                      if (sel && sel.from !== sel.to) {
+                        setSelectedTextRange({ start: sel.from, end: sel.to });
+                        setShowFloatingMenu(true);
+                        const rect = sel.rect;
+                        if (rect) {
+                          setFloatingMenuPos({
+                            x: Math.max(20, Math.min(600, rect.left + 20)),
+                            y: Math.max(10, rect.top - 60),
+                          });
+                        }
+                      } else {
+                        setSelectedTextRange(null);
+                        setShowFloatingMenu(false);
+                      }
+                    }}
+                    className="w-full flex-1"
                   />
                 </div>
 
@@ -2138,12 +2220,12 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
 
           {/* VERSION HISTORY LEDGER */}
           <div className="p-4">
-            <span className="text-[10px] font-bold text-gray-400 font-mono uppercase tracking-wider block mb-3">
+            {/* <span className="text-[10px] font-bold text-gray-400 font-mono uppercase tracking-wider block mb-3">
               3. Version History Control
-            </span>
+            </span> */}
             <div className="space-y-3 relative before:absolute before:top-2 before:bottom-2 before:left-[14px] before:w-[1px] before:bg-gray-100">
               {(selectedDoc?.versions?.length ?? 0) === 0 ? (
-                <div className="text-[10px] text-gray-400 italic font-mono">- No version history yet.</div>
+                <div className="text-[10px] text-gray-400 italic font-mono"></div>
               ) : (
                 (selectedDoc?.versions ?? []).map((ver) => (
                 <div key={ver.version} className="flex space-x-3.5 relative">
@@ -2171,6 +2253,61 @@ export default function DraftAgreement({ documents, authToken, onRefresh, onSele
             </div>
           </div>
 
+        </div>
+      )}
+
+      {/* SAVE DRAFT NAMING MODAL */}
+      {showSaveDraftModal && (
+        <div className="fixed inset-0 bg-black/55 backdrop-blur-[1px] flex items-center justify-center p-4 z-50">
+          <div className="bg-white border border-gray-200 rounded-2xl p-6 shadow-2xl max-w-sm w-full relative">
+            <h3 className="text-base font-bold text-gray-900 mb-2">Save Draft</h3>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const trimmed = draftNameInput.trim();
+                if (!trimmed) return;
+                setShowSaveDraftModal(false);
+                handleSaveDraft("Manual Editor Draft Commit", trimmed);
+              }}
+              className="space-y-4"
+            >
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">
+                  Draft Name <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  id="save-draft-name-input"
+                  type="text"
+                  required
+                  autoFocus
+                  placeholder="e.g. Acme Corp NDA Final"
+                  value={draftNameInput}
+                  onChange={(e) => setDraftNameInput(e.target.value)}
+                  className="w-full bg-gray-50 border border-gray-150 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-black"
+                />
+              </div>
+
+              <div className="flex space-x-3 pt-2">
+                <button
+                  id="save-draft-cancel-btn"
+                  type="button"
+                  onClick={() => setShowSaveDraftModal(false)}
+                  className="flex-1 border border-gray-200 rounded-lg py-2 text-xs font-bold text-gray-600 hover:bg-gray-50 transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  id="save-draft-submit-btn"
+                  type="submit"
+                  disabled={!draftNameInput.trim()}
+                  className="flex-1 bg-[#0F172A] text-white rounded-lg py-2 text-xs font-bold hover:bg-[#1E293B] transition shadow-md cursor-pointer font-mono uppercase disabled:opacity-40"
+                >
+                  Save Draft
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
 
